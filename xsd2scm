@@ -5,6 +5,7 @@
 	(clos user)
 	(sagittarius object)
 	(sagittarius regex)
+	(sagittarius control)
 	(text sxml xsd schema)
 	(getopt)
 	(srfi :1)
@@ -72,6 +73,10 @@
 			  (else (error 'class->slot-name 
 				       "[internal] bad name" class))))))
 
+(define-method schema-name ((s <list>))
+  ;; must be list of elements
+  (string-concatenate (map schema-name s)))
+
 ;;(define-method generate :around (a b) (print a) (call-next-method))
 
 ;; well choise and sequence can be treated the same...
@@ -83,20 +88,44 @@
 
 ;; generate clos class define here
 (define-method generate ((xct <xsd-complex-type>) parent)
-  (let ((elms (filter-map (cut generate <> parent) (~ xct 'children)))
+  ;; need to check if the child element is complex content
+  ;; FIXME
+  (define (do-children children)
+    (if (and (not (null? children)) 
+	     (is-a? (car children) <xsd-complex-content>))
+	(generate (car children) xct)
+	(filter-map (cut generate <> xct) children)))
+
+  (let ((elms (do-children (~ xct 'children)))
 	(name (or (~ xct 'name)
 		  ;; annonymous type so use the parent name as it's class name
 		  (schema-name parent))))
     `(define-xml-type ,(string->symbol (->scheme-class-name name))
        ;; TODO get extension as base class
-       ()
+       ,(cond ((assq :super elms) => cdr)
+	       (else '()))
        ,(cond ((assq :composite elms) => cdr)
 	      (else '()))
        :attributes
-       ,(filter-map (lambda (e) (and (not (eq? (car e) :composite)) e))
+       ,(filter-map (lambda (e) 
+		      (let ((type (car e)))
+			(and (not (eq? type :composite))
+			     (not (eq? type :super)) e)))
 		    elms)
        :element-name ,(string->symbol name)
        :namespace ,(schema-namespace xct))))
+
+(define-method generate ((xcc <xsd-complex-content>) parent)
+  ;; for now only support extension
+  (let ((children (~ xcc 'children)))
+    (unless (null? (cdr children))
+      (error 'generate "unsupported complexContent format"))
+    (let ((child (car children)))
+      (unless (is-a? child <xsd-extension>)
+	(error 'generate "complexContent only supports extension for now"))
+      (let ((elms (filter-map (cut generate <> parent) (~ child 'children))))
+	(cons (list :super (->scheme-type (~ child 'base))) elms)))))
+
 
 ;; simple type
 (define-method generate ((xst <xsd-simple-type>) parent)
@@ -123,19 +152,26 @@
 	;; For now we ignore the children, it can only have simpleType anyway
 	#;(elms (map generate (~ attr 'children)))
 	)
-    (let ((scheme-name (string->symbol (->scheme-name name))))
-      (list scheme-name
-	    :init-keyword (make-keyword scheme-name)
-	    :element-name (string->symbol name)
-	    :element-type (->scheme-type type)
-	    ))))
+    (let ((scheme-name (string->symbol (->scheme-name name)))
+	  (element-name (string->symbol name)))
+      `(,scheme-name
+	:init-keyword ,(make-keyword scheme-name)
+	,@(if (eq? scheme-name element-name)
+	      '() 
+	      `(:element-name ,element-name)) 
+	:element-type ,(->scheme-type type)
+	))))
 
 ;; how should we treat?
 (define-method generate ((attr <xsd-key>) parent) #f)
 (define-method generate ((attr <xsd-keyref>) parent) #f)
 
 (define-method generate ((e <xml-schema-element>) parent)
-  (let ((elms (filter-map (cut generate <> e) (~ e 'children)))
+  (let ((elms (filter-map (cut generate <> 
+			       (cond ((eq? e parent) e)
+				     ((pair? parent) (cons e parent))
+				     (else (list e parent))))
+			  (~ e 'children)))
 	(min  (schema-min-occurs e))
 	(max  (schema-max-occurs e))
 	(name (schema-name e))
@@ -165,11 +201,14 @@
 		  (error 'generate "unsupported format of element"))
 	      #f)
 	    (let ((scheme-type (->scheme-type type))
-		  (scheme-name (string->symbol (->scheme-name name))))
-	      (list scheme-name
-		    :init-keyword (make-keyword scheme-name)
-		    :element-name (string->symbol name)
-		    :element-type `(,scheme-type ,min ,max))))
+		  (scheme-name (string->symbol (->scheme-name name)))
+		  (element-name (string->symbol name)))
+	      `(,scheme-name
+		:init-keyword ,(make-keyword scheme-name)
+		,@(if (eq? scheme-name element-name)
+		      '()
+		      `(:element-name ,element-name))
+		:element-type (,scheme-type ,min ,max))))
 	;; elms should be define-xml-type
 	(let ((classes (~ (*context*) 'scheme-classes)))
 	  (unless (null? elms)
@@ -195,6 +234,44 @@
 (define (->simple-defs name&type)
   `(define ,(car name&type) ,(cdr name&type)))
 
+;; sort the defined classed by dependency
+;; base class and slot type first then actual
+;; basically xsd can't extends 2 types.
+(define (defined-name def) (cadr def))
+(define (defined-parent-class def) (caddr def))
+(define (defined-slots def) (cadddr def))
+(define (sort-class class-defs simples)
+  (define simple-names (map cadr simples))
+  (define (extract-dependencies def)
+    (let ((slot-defs (defined-slots def)))
+      `(,(defined-name def)
+	,@(defined-parent-class def))))
+  ;; remove resolved dependency
+  (define (update-dependency deps removes)
+    (filter-map
+     (lambda (dep) (and (not (null? (cdr dep))) dep))
+     (dolist (dep deps deps)
+       (set-cdr! dep (filter-map (lambda (d) (and (not (memq d removes)) d))
+				 (cdr dep))))))
+  (let ((deps (filter-map (lambda (def)
+			    (let ((d (extract-dependencies def)))
+			      (and (not (null? (cdr d))) d)))
+			  class-defs)))
+    (let loop ((rest class-defs)
+	       (deps (update-dependency deps '()))
+	       (acc '()))
+      (if (null? deps)
+	  (reverse! `(,@rest . ,acc))
+	  (let ((acc (fold-right (lambda (def knil)
+				   (cond ((assq (defined-name def) deps) knil)
+					 (else (cons def knil))))
+				 acc rest))
+		(rest (filter-map (lambda (def)
+				    (and (assq (defined-name def) deps) def))
+				  rest)))
+	    (loop rest (update-dependency deps (map defined-name acc)) acc))))
+    ))
+
 (define (main args)
   (with-args (cdr args)
       ((library-name (#\l "library") #t #f)
@@ -213,9 +290,11 @@
 		    (current-output-port)))
 	   (defs (filter-map (cut generate <>) xsd)))
       ;; defs = ((define-xml-type ...) ...)
-      (let ((only-defs `(,@(map ->simple-defs (~ (*context*) 'simple-types))
-			 ,@(append-map values defs)
-			 ,@(reverse (~ (*context*) 'scheme-classes)))))
+      (let* ((simples (map ->simple-defs (~ (*context*) 'simple-types)))
+	     (only-defs `(,@simples
+			  ,@(sort-class 
+			     `(,@(append-map values defs)
+			       ,@(~ (*context*) 'scheme-classes)) simples))))
 	(if library-name
 	    (pp `(library ,(read-from-string library-name)
 		     (export ,@(map cadr only-defs))

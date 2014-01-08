@@ -121,7 +121,8 @@
 	      (let*-values (((slot name type) (resolve-slot (car slots))))
 		(loop (cdr slots) 
 		      (cons #`(#,@slot :element-name '#,(if name name (car slot))
-				       :element-type #,@type
+				       :element-type (lambda () #,(car type))
+				       #,@(cdr type)
 				       :attribute #,attr?)
 			    r))))))
       (define (strip<> s)
@@ -182,7 +183,7 @@
       (let ((slot-name (slot-definition-name s)))
 	(values slot-name (slot-definition-option s :element-name slot-name))))
     (define (resolve-type s)
-      (values (slot-definition-option s :element-type)
+      (values ((slot-definition-option s :element-type))
 	      (slot-definition-option s :min)
 	      (slot-definition-option s :max)))
     (let ((class (class-of element)))
@@ -297,7 +298,7 @@
 	(define (get-name s)
 	  (slot-definition-option s :element-name))
 	(define (get-type s)
-	  (slot-definition-option s :element-type))
+	  ((slot-definition-option s :element-type)))
 	;; set slots
 	;; attributes
 	(for-each

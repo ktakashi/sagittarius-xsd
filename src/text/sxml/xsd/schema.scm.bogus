@@ -1,0 +1,90 @@
+;;; -*- mode:scheme; coding:utf-8; -*-
+;;;
+;;; text/sxml/xsd/schema.scm - XSD Schema library.
+;;;  
+;;;   Copyright (c) 2013  Takashi Kato  <ktakashi@ymail.com>
+;;;   
+;;;   Redistribution and use in source and binary forms, with or without
+;;;   modification, are permitted provided that the following conditions
+;;;   are met:
+;;;   
+;;;   1. Redistributions of source code must retain the above copyright
+;;;      notice, this list of conditions and the following disclaimer.
+;;;  
+;;;   2. Redistributions in binary form must reproduce the above copyright
+;;;      notice, this list of conditions and the following disclaimer in the
+;;;      documentation and/or other materials provided with the distribution.
+;;;  
+;;;   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+;;;   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+;;;   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+;;;   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+;;;   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+;;;   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+;;;   TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+;;;   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+;;;   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+;;;   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+;;;   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+;;;  
+
+;; don't say this is a weird name
+(library (text sxml xsd schema)
+    (export 
+	    )
+    (import (rnrs)
+	    (sagittarius)
+	    (sagittarius control)
+	    (sagittarius object)
+	    (clos core)
+	    (clos user)
+	    (srfi :1 lists)
+	    (srfi :13 strings)
+	    (srfi :26 cut)
+	    (text sxml xsd types)
+	    (text sxml tools))
+  
+  ;; only supports 2001
+  ;; people use the latest it's 13 years ago already!!
+  (define-constant +xsd-2001-ns-uri+ "http://www.w3.org/2001/XMLSchema")
+
+  ;; openAttrs
+  (define-xml-type <xs:open-attrs> ()
+    ((other-elements :element-type (:any-type 0 unbounded)))
+    :attributes
+    ((other-attributes :element-type (:any-attribute 0 unbounded)))
+    :element-name openAttrs
+    :namespace +xsd-2001-ns-uri+)
+
+  ;; annotated
+  (define-xml-type <xs:annotated> (<xs:open-attrs>)
+    (()))
+
+  ;; from 
+  (define-xml-type <xs:schema> (<xs:open-attrs>)
+    (;; choise...
+     (include :element-type (<xs:include> 0 unbounded))
+     (import :element-type (<xs:import> 0 unbounded))
+     (redefine :element-type (<xs:redefine> 0 unbounded))
+     (annotation :element-type (<xs:annotation> 0 unbounded))
+     ;; sequence
+     (group :element-type (<xs:schema-top> 0 unbounded))
+     (annotation :element-type (<xs:annotation> 0 unbounded))
+     )
+    :attributes
+    ((target-namespace :element-type :anyURI :element-name targetNamespace)
+     (version :element-type :token)
+     (final-default :element-type :fullDerivationSet
+		    :element-name finalDefault :init-value "" :use :optional)
+     (block-default :element-type :blockSet 
+		    :element-name blockDefault :init-value "" :use :optional)
+     (attribute-form-default :element-type :formChoice
+			     :element-name attributeFormDefault
+			     :init-value 'unqualified :use :optional)
+     (id :element-type :ID)
+     ;; TODO xml:lang ref?
+     )
+    :element-name schema
+    :namespace +xsd-2000-ns-uri+)
+
+  )

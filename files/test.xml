@@ -1,0 +1,5 @@
+<ns1:Request xmlns:ns1="http://sagittarius-scheme.com/types"
+	     RequestType="tn">
+  <ns1:name>Takashi</ns1:name>
+  <ns1:Expiry>2013-12-31</ns1:Expiry>
+</ns1:Request>

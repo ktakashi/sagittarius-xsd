@@ -1,0 +1,229 @@
+#!/bin/env sash
+;; -*- mode:scheme; coding:utf-8; -*-
+#!read-macro=sagittarius/regex
+(import (rnrs)
+	(clos user)
+	(sagittarius object)
+	(sagittarius regex)
+	(text sxml xsd schema)
+	(getopt)
+	(srfi :1)
+	(srfi :13)
+	(srfi :26)
+	(srfi :39)
+	(text sxml tools)
+	(pp))
+
+(define (usage)
+  (print "Usage: xsd2scm [OPTION...] FILE")
+  (print "Options:")
+  (print "  -l<library-name>,--library=<library-name>")
+  (print "   Generates Scheme class in R6RS library form named <library-name>.")
+  (print)
+  (print "  -I<dir>,--include=<dir>")
+  (print "   Specifies include directory. If the target FILE contains include")
+  (print "   or import then <dir> will be one of the candidate directory.")
+  (print "   This option can be passed multiple times.")
+  (print)
+  (print "  -o<file>,--output=<file>")
+  (print "   Specifies output file. By default stdout.")
+  (exit 0))
+
+(define (fixup-locator includes)
+  (lambda (schema-location)
+    (let ((file (exists (lambda (include)
+			  (let ((p (build-path include schema-location)))
+			    (and (file-exists? p) p))) includes)))
+      (if file
+	  (file-locator file)
+	  (error 'xsd2scm "import/included XSD does not exist on tha path"
+		 schema-location includes)))))
+
+(define-class <context> ()
+  ((scheme-classes :init-value '())
+   (simple-types   :init-value '())))
+
+(define *context* (make-parameter (make <context>)))
+
+;; naive
+(define (->scheme-name name)
+  (let ((name (regex-replace-first #/^([A-Z]+)/ name
+	        (lambda (m) (string-downcase (m 1))))))
+    (regex-replace-all #/([A-Z]+)/ name
+      (lambda (m) (string-append "-" (string-downcase (m 1)))))))
+
+(define (->scheme-class-name name :optional (with-type? #t))
+  (let ((name (->scheme-name name)))
+    (string-append "<" name (if with-type? "-type" "") ">")))
+
+(define (->keyword s) (make-keyword (string->symbol s)))
+
+(define (->scheme-type type)
+  (let ((ncname (sxml:ncname (list (string->symbol type)))))
+    (if (or (string-prefix? +xsd-2001-ns-uri+ type)
+	    (string-prefix? +xsd-2000-ns-uri+ type)
+	    (string-prefix? +xsd-1999-ns-uri+ type))
+	(->keyword ncname)
+	(string->symbol (->scheme-class-name ncname)))))
+
+(define (class->slot-name class)
+  (let ((name (symbol->string class)))
+    (string->symbol (cond ((#/^<(.+?)>$/ name) => (lambda (m) (m 1)))
+			  (else (error 'class->slot-name 
+				       "[internal] bad name" class))))))
+
+;;(define-method generate :around (a b) (print a) (call-next-method))
+
+;; well choise and sequence can be treated the same...
+(define-method generate ((comp <xsd-compositor>) parent)
+  (let ((elms (filter-map (cut generate <> parent) (~ comp 'children)))
+	(min  (schema-min-occurs comp))
+	(max  (schema-max-occurs comp)))
+    (cons :composite elms)))
+
+;; generate clos class define here
+(define-method generate ((xct <xsd-complex-type>) parent)
+  (let ((elms (filter-map (cut generate <> parent) (~ xct 'children)))
+	(name (or (~ xct 'name)
+		  ;; annonymous type so use the parent name as it's class name
+		  (schema-name parent))))
+    `(define-xml-type ,(string->symbol (->scheme-class-name name))
+       ;; TODO get extension as base class
+       ()
+       ,(cond ((assq :composite elms) => cdr)
+	      (else '()))
+       :attributes
+       ,(filter-map (lambda (e) (and (not (eq? (car e) :composite)) e))
+		    elms)
+       :element-name ,(string->symbol name)
+       :namespace ,(schema-namespace xct))))
+
+;; simple type
+(define-method generate ((xst <xsd-simple-type>) parent)
+  ;; ok for now only handle restriction
+  (let ((children (~ xst 'children)))
+    (unless (null? (cdr children))
+      (error 'generate "unsupported simpleType format"))
+    (let ((child (car children)))
+      (unless (is-a? child <xsd-restriction>)
+	(error 'generate "simpleType only supports restriction for now"))
+      (let ((simple-type (->scheme-type (~ child 'base)))
+	    (scheme-name (->scheme-type (~ xst 'name))))
+	(unless (keyword? simple-type)
+	  (error 'generate "simpleType only supports builtin type"))
+	;; push the very first resolver
+	(let ((simples (~ (*context*) 'simple-types)))
+	  (set! (~ (*context*) 'simple-types) (acons scheme-name simple-type
+						     simples))))
+      #f)))
+
+(define-method generate ((attr <xsd-attribute>) parent)
+  (let ((name (~ attr 'name))
+	(type (~ attr 'type))
+	;; For now we ignore the children, it can only have simpleType anyway
+	#;(elms (map generate (~ attr 'children)))
+	)
+    (let ((scheme-name (string->symbol (->scheme-name name))))
+      (list scheme-name
+	    :init-keyword (make-keyword scheme-name)
+	    :element-name (string->symbol name)
+	    :element-type (->scheme-type type)
+	    ))))
+
+;; how should we treat?
+(define-method generate ((attr <xsd-key>) parent) #f)
+(define-method generate ((attr <xsd-keyref>) parent) #f)
+
+(define-method generate ((e <xml-schema-element>) parent)
+  (let ((elms (filter-map (cut generate <> e) (~ e 'children)))
+	(min  (schema-min-occurs e))
+	(max  (schema-max-occurs e))
+	(name (schema-name e))
+	(type (schema-type e)))
+    ;; #f is annonymous type (inlined
+    (if type
+	(if (eq? e parent)
+	    (let ((classes (~ (*context*) 'scheme-classes))
+		  (scheme-type (->scheme-type type)))
+	      ;; this must be a definition of element with
+	      ;; defined complex type so assume no child element
+	      (when (keyword? scheme-type)
+		(error 'generate 
+		       "builtin type is not supported for element type" type))
+	      ;; FIXME this won't handle like
+	      ;; <xs:element name="blar" type="xs:string"/>
+	      ;; FIXME this actually need to consider the namespace
+	      (if (null? elms)
+		  (set! (~ (*context*) 'scheme-classes)
+			`((define-xml-type ,(string->symbol
+					     (->scheme-class-name name #f))
+			    (,scheme-type)
+			    ()
+			    :element-name ,(string->symbol name)
+			    :namespace ,(~ e 'namespace))
+			  . ,classes))
+		  (error 'generate "unsupported format of element"))
+	      #f)
+	    (let ((scheme-type (->scheme-type type))
+		  (scheme-name (string->symbol (->scheme-name name))))
+	      (list scheme-name
+		    :init-keyword (make-keyword scheme-name)
+		    :element-name (string->symbol name)
+		    :element-type `(,scheme-type ,min ,max))))
+	;; elms should be define-xml-type
+	(let ((classes (~ (*context*) 'scheme-classes)))
+	  (unless (null? elms)
+	    (set! (~ (*context*) 'scheme-classes) `(,@elms . ,classes)))
+	  ;; assum only one type... (i think it should be)
+	  (let* ((complex-type (car elms))
+		 (scheme-name (cadr complex-type))
+		 (element-name (cadr (memq :element-name complex-type))))
+	    ;; ignore top level element
+	    ;; FIXME ugly
+	    (and (not (eq? e parent))
+		 (let ((name (class->slot-name scheme-name)))
+		   (list name
+			 :init-keyword (make-keyword name)
+			 :element-name element-name
+			 :element-type `(,scheme-name ,min ,max)))))))))
+
+(define-method generate ((xsd <xml-schema-definition>))
+  (filter-map (lambda (e) (generate e e)) (~ xsd 'elements)))
+
+(define (read-from-string s) (read (open-string-input-port s)))
+
+(define (->simple-defs name&type)
+  `(define ,(car name&type) ,(cdr name&type)))
+
+(define (main args)
+  (with-args (cdr args)
+      ((library-name (#\l "library") #t #f)
+       (includes     (#\I "include") * '())
+       (output       (#\o "output") #t #f)
+       . rest)
+    (when (null? rest) (usage))
+    (unless (file-exists? (car rest))
+      (format (current-error-port) "given file does not exist ~a" (car rest))
+      (exit -1))
+    (let* ((xsd (parse-xsd-file (car rest) :locator (fixup-locator includes)))
+	   (out (or (and output (open-file-output-port output 
+						       (file-options no-fail)
+						       (buffer-mode block)
+						       (native-transcoder)))
+		    (current-output-port)))
+	   (defs (filter-map (cut generate <>) xsd)))
+      ;; defs = ((define-xml-type ...) ...)
+      (let ((only-defs `(,@(map ->simple-defs (~ (*context*) 'simple-types))
+			 ,@(append-map values defs)
+			 ,@(reverse (~ (*context*) 'scheme-classes)))))
+	(if library-name
+	    (pp `(library ,(read-from-string library-name)
+		     (export ,@(map cadr only-defs))
+		     (import (rnrs) (text sxml xsd))
+		   ,@only-defs)
+		out)
+	    (begin
+	      (pp '(import (rnrs) (text sxml xsd)) out)
+	      (pp `(begin ,@only-defs) out)))))
+    )
+)

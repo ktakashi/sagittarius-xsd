@@ -14,7 +14,7 @@ You can use
 [Sagittarius SOAP lite](https://github.com/ktakashi/sagittarius-soap)
 or manually send it.
 
-Following is an example how to collabolate with SOAP lite library.
+Following is an example how to collaborate with SOAP lite library.
 
 ```scheme
 (import (soap lite) (soap transport http) (rfc http))

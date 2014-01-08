@@ -206,7 +206,18 @@
 			       (if (slot-bound? element slot-name)
 				   `(,name ,(primitive->xml-attribute 
 					     (~ element slot-name)))
-				   #f))) attr))
+				   #f))) attr)
+	     ;; in case of super class is there then we need to specify the type
+	     ,@(let ((supers (filter-map (lambda (c) 
+					   (and (is-a? c <xml-element>) c))
+					 (class-direct-supers class))))
+		 (if (null? supers)
+		     '()
+		     ;; use full name (i'm sick and tired of this...)
+		     (let ((name (convert-name (~ class 'element) class)))
+		       `((http://www.w3.org/2001/XMLSchema-instance:type 
+			  ,(symbol->string name))))))
+	     )
 	  ;; elements
 	  ,@(fold-right 
 	     (lambda (s knil)
@@ -267,9 +278,27 @@
   (define (unmarshall-xml element :key 
 			  (indent #f)
 			  (ns-prefix-assig '()))
+    (define (collect-all-namespace xml)
+      (let ((m (regex-matcher #/xmlns:(\w+)="([^\"]+)"/ xml)))
+	(let loop ((r '()))
+	  (if (regex-find m)
+	      (loop (acons (m 2) (m 1) r))
+	      (reverse! r)))))
     ;; this is safer so that it doesn't have any unwanted spaces
-    (srl:sxml->string (unmarshall-sxml element) '() indent 'xml
-		      ns-prefix-assig #t 'omit "1.0"))
+    (let* ((xml (srl:sxml->string (unmarshall-sxml element) '() indent 'xml
+				  ns-prefix-assig #t 'omit "1.0"))
+	   (namespaces (collect-all-namespace xml)))
+      ;; fixup some namespace in its attributes...
+      (let loop ((namespaces namespaces) (xml xml))
+	(if (null? namespaces)
+	    xml
+	    (loop (cdr namespaces)
+		  (let ((ns (car namespaces)))
+		    ;; for now very naive one check only type
+		    (regex-replace-all 
+		     (regex (string-append "type=\"" (car ns) "[^\"]")) xml 
+		     (lambda (m) (string-append "type=\"" (cdr ns) ":")))))))
+      ))
 
   (define-method xml-value->primitive ((type (eql :string)) v)
     (car v))

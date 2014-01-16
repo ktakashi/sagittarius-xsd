@@ -167,6 +167,10 @@
 
   (define-method primitive->xml-value ((type (eql :date)) (date <date>))
     (date->string date "~Y-~m-~d"))
+  ;; trust you :)
+  (define-method primitive->xml-value ((type (eql :date)) (date <string>)) date)
+  (define-method primitive->xml-value ((type (eql :dateTime)) (date <string>))
+    date)
 
   (define-method primitive->xml-attribute ((type <keyword>) v)
     (primitive->xml-value key v))
@@ -304,6 +308,9 @@
     (car v))
   (define-method xml-value->primitive ((type (eql :date)) v)
     (string->date (car v) "~Y-~m-~d"))
+  (define-method xml-value->primitive ((type (eql :dateTime)) v)
+    ;; Fixme lack of millisecond
+    (string->date (car v) "~Y-~m-~dT~H:~M:~S.~z"))
 
   ;; well...
   (define-method xml-attribute->primitive ((type <keyword>) v)

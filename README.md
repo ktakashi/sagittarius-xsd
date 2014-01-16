@@ -35,6 +35,7 @@ Following is an example how to collaborate with SOAP lite library.
 * document. 
 * more test.
 * cover whole XSD specification.
+* after 0.5.0, use direct sub class for marshall
 
 Since I didn't write API document yet so for users who want't to try this,
 please see `test.scm`, you will find how to use.

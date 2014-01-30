@@ -47,6 +47,7 @@
 	    (sagittarius object)
 	    (sagittarius time) ;; for <date>
 	    (srfi :1 lists)
+	    (srfi :13 strings)
 	    (srfi :26 cut)
 	    (clos user)
 	    (clos core)
@@ -316,6 +317,9 @@
   (define-method xml-attribute->primitive ((type <keyword>) v)
     (xml-value->primitive type (list v)))
 
+  (define-constant +instance:type+ 
+    'http://www.w3.org/2001/XMLSchema-instance:type)
+
   ;; need to take class to know which object we need to construct
   (define (marshall-sxml class sxml)
     (define (check-namespace element ncname namespace)
@@ -363,7 +367,15 @@
 	 (lambda (s)
 	   (define (get-max s) (slot-definition-option s :max))
 	   (define (get-min s) (slot-definition-option s :min))
-
+	   (define (get-real-type class e)
+	     (or (and-let* ((xml-type (sxml:attr e +instance:type+))
+			    (subclasses (class-direct-subclasses class)))
+		   (find (lambda (c)
+			   (let ((ns (slot-ref c 'namespace))
+				 (e  (slot-ref c 'element)))
+			     (string=? xml-type (format "~a:~a" ns e))))
+			 subclasses))
+		 class))
 	   (define (check-element-count elems min max)
 	     (let ((n (length elems)))
 	       (when (< n min)
@@ -393,7 +405,8 @@
 				   (error 'marshall
 					  "given class is not marshallable"
 					  type))
-				 (let ((o (make type)))
+				 (let* ((type (get-real-type type e))
+					(o (make type)))
 				   (marshall-rec o type e)))
 			       e))))
 	       ;; check min max
@@ -419,5 +432,124 @@
 	(marshall-rec o class root-element))))
 
   (define (marshall-xml class xml)
-    (marshall-sxml class (ssax:xml->sxml (open-string-input-port xml) '())))
+    (marshall-sxml class (%ssax:xml->sxml (open-string-input-port xml) '())))
+
+  ;; internal parser...
+  (define (%ssax:xml->sxml port dummy)
+    (define (symbol-append a b)
+      (string->symbol (format "~a:~a" a b)))
+    ;; To make things easier, we don't use user defined namespace-prefix-assig
+    (define namespace-prefix-assig '())
+    ;; the attribute which value needs to be qualified.
+    ;; say 'name', 'id' and so on should not be but 'type'
+    ;; TODO, not sure which one should be other than 'type'
+    (define qualified '(http://www.w3.org/2001/XMLSchema-instance:type))
+    (letrec
+	((namespaces
+	  (map (lambda (el)
+		 (cons* #f (car el) (ssax:uri-string->symbol (cdr el))))
+	       namespace-prefix-assig))
+
+	 (RES-NAME->SXML
+	  (lambda (res-name)
+	    (string->symbol
+	     (string-append
+	      (symbol->string (car res-name))
+	      ":"
+	      (symbol->string (cdr res-name))))))
+	 (convert-namespace (lambda (namespaces value)
+			      (define (gen-value v rns)
+				(string-append (symbol->string rns)
+					       ":"
+					       v))
+			      (or (receive (ns v) (string-scan value #\: 'both)
+				    ;; we don't do that match such as 
+				    ;; {namespace}:string stuff.
+				    (and-let* (( ns )
+					       (ns (string->symbol ns))
+					       (slot (assq ns namespaces))
+					       (rns (cadr slot)))
+				      (gen-value v rns)))
+				  ;; thus no ':' but there may be *DEFAULT*
+				  ;; in namespaces
+				  (cond ((assq '*DEFAULT* namespaces)
+					 => (lambda (default)
+					      (and-let* ((rns (cadr default)))
+						(gen-value value rns))))
+					(else #f))
+				  value))))
+      (let ((result
+	     (reverse
+	      ((ssax:make-parser
+		NEW-LEVEL-SEED 
+		(lambda (elem-gi attributes namespaces
+				 expected-content seed)
+		  '())
+		
+		FINISH-ELEMENT
+		(lambda (elem-gi attributes namespaces parent-seed seed)
+		  (let ((seed (ssax:reverse-collect-str-drop-ws seed))
+			(attrs
+			 (attlist-fold
+			  (lambda (attr accum)
+			    ;; TODO it's a bit too much assumption
+			    ;; but for now only handles instance:type
+			    (let* ((raw-attr (if (pair? (car attr))
+						 (symbol-append (car (car attr))
+								(cdr (car attr)))
+						 (car attr)))
+				   (value (if (memq raw-attr qualified)
+					      (convert-namespace namespaces
+								 (cdr attr))
+					      (cdr attr))))
+			      (cons (list 
+				     (if (symbol? raw-attr)
+					 raw-attr
+					 (RES-NAME->SXML raw-attr))
+				     value) accum)))
+			  '() attributes)))
+		    (cons
+		     (cons 
+		      (if (symbol? elem-gi) elem-gi
+			  (RES-NAME->SXML elem-gi))
+		      (if (null? attrs) seed
+			  (cons (cons '@ attrs) seed)))
+		     parent-seed)))
+
+		CHAR-DATA-HANDLER
+		(lambda (string1 string2 seed)
+		  (if (string-null? string2) (cons string1 seed)
+		      (cons* string2 string1 seed)))
+
+		DOCTYPE
+		(lambda (port docname systemid internal-subset? seed)
+		  (when internal-subset?
+		    (ssax:warn port
+			       "Internal DTD subset is not currently handled ")
+		    (ssax:skip-internal-dtd port))
+		  (ssax:warn port "DOCTYPE DECL " docname " "
+			     systemid " found and skipped")
+		  (values #f '() namespaces seed))
+
+		UNDECL-ROOT
+		(lambda (elem-gi seed)
+		  (values #f '() namespaces seed))
+
+		PI
+		((*DEFAULT* . (lambda (port pi-tag seed)
+				(cons
+				 (list '*PI* pi-tag 
+				       (ssax:read-pi-body-as-string port))
+				 seed))))
+		)
+	       port '()))))
+	(cons '*TOP*
+	      (if (null? namespace-prefix-assig)
+		  result
+		  (cons
+		   (list '@ (cons '*NAMESPACES* 
+				  (map (lambda (ns) (list (car ns) (cdr ns)))
+				       namespace-prefix-assig)))
+		   result)))
+	)))
 )

@@ -75,7 +75,7 @@
 
 (define-method schema-name ((s <list>))
   ;; must be list of elements
-  (string-concatenate (map schema-name s)))
+  (string-concatenate (filter-map schema-name s)))
 
 ;;(define-method generate :around (a b) (print a) (call-next-method))
 

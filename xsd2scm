@@ -2,6 +2,7 @@
 ;; -*- mode:scheme; coding:utf-8; -*-
 #!read-macro=sagittarius/regex
 (import (rnrs)
+	(clos core)
 	(clos user)
 	(sagittarius object)
 	(sagittarius regex)
@@ -40,12 +41,6 @@
 	  (error 'xsd2scm "import/included XSD does not exist on tha path"
 		 schema-location includes)))))
 
-(define-class <context> ()
-  ((scheme-classes :init-value '())
-   (simple-types   :init-value '())))
-
-(define *context* (make-parameter (make <context>)))
-
 ;; naive
 (define (->scheme-name name)
   (let ((name (regex-replace-first #/^([A-Z]+)/ name
@@ -73,205 +68,230 @@
 			  (else (error 'class->slot-name 
 				       "[internal] bad name" class))))))
 
-(define-method schema-name ((s <list>))
-  ;; must be list of elements
-  (string-concatenate (filter-map schema-name s)))
 
-;;(define-method generate :around (a b) (print a) (call-next-method))
+(define *parents* (make-parameter '()))
 
-;; well choise and sequence can be treated the same...
-(define-method generate ((comp <xsd-compositor>) parent)
-  (let ((elms (filter-map (cut generate <> parent) (~ comp 'children)))
-	(min  (schema-min-occurs comp))
-	(max  (schema-max-occurs comp)))
-    (cons :composite elms)))
+;; for xs:extension
+;; key:   full-name
+;; value: <complex-type>
+(define type-table (make-string-hashtable))
 
-;; generate clos class define here
-(define-method generate ((xct <xsd-complex-type>) parent)
-  ;; need to check if the child element is complex content
-  ;; FIXME
-  (define (do-children children)
-    (if (and (not (null? children)) 
-	     (is-a? (car children) <xsd-complex-content>))
-	(generate (car children) xct)
-	(filter-map (cut generate <> xct) children)))
+(define-class <type> ()
+  ((name :init-keyword :name)
+   (element :init-keyword :element)
+   (full-name :init-keyword :full-name)
+   ;; for annonymous
+   (min-occurs :init-keyword :min-occurs :init-value 1)
+   (max-occurs :init-keyword :max-occurs :init-value 1)
+   (parent     :init-keyword :parent :init-value #f)))
 
-  (let ((elms (do-children (~ xct 'children)))
-	(name (or (~ xct 'name)
-		  ;; annonymous type so use the parent name as it's class name
-		  (schema-name parent))))
-    `(define-xml-type ,(string->symbol (->scheme-class-name name))
-       ;; TODO get extension as base class
-       ,(cond ((assq :super elms) => cdr)
-	       (else '()))
-       ,(cond ((assq :composite elms) => cdr)
-	      (else '()))
-       :attributes
-       ,(filter-map (lambda (e) 
-		      (let ((type (car e)))
-			(and (not (eq? type :composite))
-			     (not (eq? type :super)) e)))
-		    elms)
-       :element-name ,(string->symbol name)
-       :namespace ,(schema-namespace xct))))
+(define-class <complex-type> (<type>)
+  ((contents :init-keyword :contents)
+   (super    :init-keyword :super)))
+(define-class <simple-type> (<type>) ())
 
-(define-method generate ((xcc <xsd-complex-content>) parent)
-  ;; for now only support extension
-  (let ((children (~ xcc 'children)))
-    (unless (null? (cdr children))
-      (error 'generate "unsupported complexContent format"))
-    (let ((child (car children)))
-      (unless (is-a? child <xsd-extension>)
-	(error 'generate "complexContent only supports extension for now"))
-      (let ((elms (filter-map (cut generate <> parent) (~ child 'children))))
-	(cons (list :super (->scheme-type (~ child 'base))) elms)))))
+(define-class <type&element> ()
+  ((type :init-keyword :type)
+   (element :init-keyword :element)))
 
+;; for complex content just holds type
+(define-class <base-type> ()
+  ((type :init-keyword :type)
+   (contents :init-keyword :contents)))
 
-;; simple type
-(define-method generate ((xst <xsd-simple-type>) parent)
-  ;; ok for now only handle restriction
-  (let ((children (~ xst 'children)))
-    (unless (null? (cdr children))
-      (error 'generate "unsupported simpleType format"))
-    (let ((child (car children)))
-      (unless (is-a? child <xsd-restriction>)
-	(error 'generate "simpleType only supports restriction for now"))
-      (let ((simple-type (->scheme-type (~ child 'base)))
-	    (scheme-name (->scheme-type (~ xst 'name))))
-	(unless (keyword? simple-type)
-	  (error 'generate "simpleType only supports builtin type"))
-	;; push the very first resolver
-	(let ((simples (~ (*context*) 'simple-types)))
-	  (set! (~ (*context*) 'simple-types) (acons scheme-name simple-type
-						     simples))))
-      #f)))
+(define-method write-object ((o <type>) out)
+  (format out "<~a ~a>" (class-name (class-of o)) (~ o 'name)))
+(define-method write-object ((o <complex-type>) out)
+  (format out "<complex-type ~a ~a>" (~ o 'name) (~ o 'contents)))
 
-(define-method generate ((attr <xsd-attribute>) parent)
-  (let ((name (~ attr 'name))
-	(type (~ attr 'type))
-	;; For now we ignore the children, it can only have simpleType anyway
-	#;(elms (map generate (~ attr 'children)))
-	)
-    (let ((scheme-name (string->symbol (->scheme-name name)))
-	  (element-name (string->symbol name)))
-      `(,scheme-name
-	:init-keyword ,(make-keyword scheme-name)
-	,@(if (eq? scheme-name element-name)
-	      '() 
-	      `(:element-name ,element-name)) 
-	:element-type ,(->scheme-type type)
-	))))
+(define-method traverse ((e <xsd-compositor>)) 
+  (let1 r (filter-map traverse (~ e 'children))
+    r))
 
-;; how should we treat?
-(define-method generate ((attr <xsd-key>) parent) #f)
-(define-method generate ((attr <xsd-keyref>) parent) #f)
+(define (generate-name e)
+  (let ((this-name (schema-name e)))
+    (when (and (null? (*parents*)) (not this-name))
+      (error 'traverse "impossible to determine name" e))
+    (or this-name ;; must be toplevel ComplexType (not checked though)
+	(string-join (map schema-name (reverse (*parents*))) "."))))
 
-(define-method generate ((e <xml-schema-element>) parent)
-  (let ((elms (filter-map (cut generate <> 
-			       (cond ((eq? e parent) e)
-				     ((pair? parent) (cons e parent))
-				     (else (list e parent))))
-			  (~ e 'children)))
-	(min  (schema-min-occurs e))
-	(max  (schema-max-occurs e))
-	(name (schema-name e))
-	(type (schema-type e)))
-    ;; #f is annonymous type (inlined
-    (if type
-	(if (eq? e parent)
-	    (let ((classes (~ (*context*) 'scheme-classes))
-		  (scheme-type (->scheme-type type)))
-	      ;; this must be a definition of element with
-	      ;; defined complex type so assume no child element
-	      (when (keyword? scheme-type)
-		(error 'generate 
-		       "builtin type is not supported for element type" type))
-	      ;; FIXME this won't handle like
-	      ;; <xs:element name="blar" type="xs:string"/>
-	      ;; FIXME this actually need to consider the namespace
-	      (if (null? elms)
-		  (set! (~ (*context*) 'scheme-classes)
-			`((define-xml-type ,(string->symbol
-					     (->scheme-class-name name #f))
-			    (,scheme-type)
-			    ()
-			    :element-name ,(string->symbol name)
-			    :namespace ,(~ e 'namespace))
-			  . ,classes))
-		  (error 'generate "unsupported format of element"))
-	      #f)
-	    (let ((scheme-type (->scheme-type type))
-		  (scheme-name (string->symbol (->scheme-name name)))
-		  (element-name (string->symbol name)))
-	      `(,scheme-name
-		:init-keyword ,(make-keyword scheme-name)
-		,@(if (eq? scheme-name element-name)
-		      '()
-		      `(:element-name ,element-name))
-		:element-type (,scheme-type ,min ,max))))
-	;; elms should be define-xml-type
-	(let ((classes (~ (*context*) 'scheme-classes)))
-	  (unless (null? elms)
-	    (set! (~ (*context*) 'scheme-classes) `(,@elms . ,classes)))
-	  ;; assum only one type... (i think it should be)
-	  (let* ((complex-type (car elms))
-		 (scheme-name (cadr complex-type))
-		 (element-name (cadr (memq :element-name complex-type))))
-	    ;; ignore top level element
-	    ;; FIXME ugly
-	    (and (not (eq? e parent))
-		 (let ((name (class->slot-name scheme-name)))
-		   (list name
-			 :init-keyword (make-keyword name)
-			 :element-name element-name
-			 :element-type `(,scheme-name ,min ,max)))))))))
+(define (full-name e)
+  (let ((namespace (~ e 'namespace))
+	(name (schema-name e)))
+    (if namespace
+	(and name 
+	     (string-append (~ e 'namespace) ":" name))
+	name)))
 
-(define-method generate ((xsd <xml-schema-definition>))
-  (filter-map (lambda (e) (generate e e)) (~ xsd 'elements)))
+;; TODO consider attributes
+(define-method traverse (e) #f) ;; default
+
+(define-method traverse ((e <xsd-extension>))
+  ;; TODO should we handle missing type??
+  (rlet1 r (make <base-type> :type (schema-base e))
+    (set! (~ r 'contents)
+	  (apply append (filter-map traverse (schema-children e))))))
+
+(define-method traverse ((e <xsd-complex-content>))
+  (let1 r (filter-map traverse (schema-children e))
+    (apply append r)))
+
+(define-method traverse ((e <xsd-simple-type>))
+  (make <simple-type> :name (generate-name e) :full-name (full-name e)
+	:element e))
+
+(define-method traverse ((e <xsd-complex-type>))
+  (define (get-min&max)
+    (let1 parents (*parents*)
+      (if (null? parents)
+	  '()
+	  (let1 e (car parents)
+	    (list :min-occurs (schema-min-occurs e)
+		  :max-occurs (schema-max-occurs e))))))
+  (let ((contents (filter-map traverse (~ e 'children)))
+	(name     (generate-name e))
+	(full-name (full-name e)))
+    (rlet1 r (apply make <complex-type> :name name 
+		    :super (and (pair? contents) 
+				(is-a? (car contents) <base-type>)
+				(~ (car contents) 'type))
+		    :contents (cond ((and (pair? contents)
+					  (pair? (car contents)))
+				     (car contents))
+				    ((and (pair? contents) 
+					  (is-a? (car contents) <base-type>))
+				     (~ (car contents) 'contents))
+				    (else contents))
+		    :full-name full-name
+		    :element e
+		    :parent (and-let* (( (not (null? (*parents*))) ))
+			      (car (*parents*)))
+		    (get-min&max))
+      ;; there is no way to extend annonymous type
+      (when full-name (set! (~ type-table full-name) r)))))
+
+(define-method traverse ((e <xml-schema-element>))
+  (parameterize ((*parents* (cons e (*parents*))))
+    (let1 contents (filter-map traverse (~ e 'children))
+      (if (null? contents)
+	  (or (and (~ e 'type) e) ;; toplevel element content must have type
+	      (error 'traverse "element must have type" e))
+	  ;; attributes are trimmed, so this should be ok
+	  (make <type&element> :type (car contents) :element e)))))
+
+(define (collect xsd)
+  ;; for now
+  ;; TODO xsd can be multiple such as xs:import.
+  ;; make this capable to handle it.
+  (let loop ((elements (~ (car xsd) 'elements))
+	     (types '())
+	     (stray-elements '()))
+    (if (null? elements)
+	(values types stray-elements)
+	(let1 r (traverse (car elements))
+	  (cond ((is-a? r <type>)
+		 (loop (cdr elements) 
+		       (cons r types) stray-elements))
+		((is-a? r <type&element>)
+		 ;; element with annonymous type
+		 ;; we create element and type separately
+		 ;; so need to be like this
+		 ;; store it to both
+		 (loop (cdr elements)
+		       (cons r types)
+		       (cons r stray-elements)))
+		(else
+		 ;; it's stray
+		 (loop (cdr elements)
+		       types (cons r stray-elements))))))))
+
+;; we don't care this
+(define-method generate-type-definition (type) #f)
+
+;; FIXME, simple type must consider the namespace as well
+(define-method generate-type-definition ((type <simple-type>))
+  (let1 e (filter-map (lambda (child) 
+			(and (is-a? child <xsd-restriction>)
+			     child))
+		      (~ type 'element 'children))
+    (when  (or (null? e) (not (null? (cdr e))))
+      (error 'generate-type-definition 
+	     "simpleType only supports restrictions for now" e))
+    (let1 simple-type (->scheme-type (~ (car e) 'base))
+      `(define ,(string->symbol (->scheme-class-name (~ type 'name)))
+	 ,simple-type))))
+
+(define (%generate-content name e type min max)
+  (let1 elm-name (string->symbol (schema-name e))
+    `(,(string->symbol name)
+      :init-keyword ,(->keyword name)
+      ,@(if (eq? (string->symbol name) elm-name) '() `(:element-name ,elm-name))
+      :element-type ,(list (->scheme-type type) min max))))
+
+(define-method generate-content ((e <xml-schema-element>))
+  (let1 name (->scheme-name (schema-name e))
+    (%generate-content name e (schema-type e)
+		       (schema-min-occurs e) (schema-max-occurs e))))
+
+;; nested annonymous types
+(define-method generate-content ((e <complex-type>))
+  ;; make slot name short...
+  (%generate-content (car (last-pair (string-split (~ e 'name) #/\./)))
+		     (~ e 'parent) (~ e 'name)
+		     (~ e 'min-occurs) (~ e 'max-occurs)))
+
+(define-method generate-content ((e <type&element>))
+  (generate-content (~ e 'type)))
+
+(define-method generate-type-definition ((type <complex-type>))
+  ;; TODO handle missing class??
+  (define (get-super type)
+    (cond ((~ type-table type)
+	   => (lambda (t)
+		(list (->scheme-type (~ t 'name)))))
+	  (else '())))
+
+  (define (generate-class type)
+    (let ((contents (~ type 'contents))
+	  (super (~ type 'super)))
+      `(define-xml-type ,(string->symbol (->scheme-class-name (~ type 'name)))
+	 ,(if super (get-super super) ())
+	 ,(map generate-content contents)
+	 :namespace ,(~ type 'element 'namespace))))
+  (let1 contents (filter-map generate-type-definition (~ type 'contents))
+    (if (null? contents)
+	(generate-class type)
+	`(begin 
+	   ,@contents
+	   ,(generate-class type)))))
+
+(define-method generate-type-definition ((type <type&element>))
+  (generate-type-definition (~ type 'type)))
+
+(define-method generate-element-definition ((e <type&element>))
+  (let ((e (~ e 'element))
+	(type (~ e 'type)))
+    `(define-xml-type ,(string->symbol (->scheme-class-name (schema-name e) #f))
+       (,(->scheme-type (~ type 'name))) ()
+       :element-type ,(->scheme-type (~ type 'name))
+       :element-name ,(string->symbol (schema-name e))
+       :namespace ,(schema-namespace e)))
+  )
+;; this is stray element which means the definition itself
+;; doesn't have any children but only type specified in toplevel
+;; simply create the type with element-name and so
+(define-method generate-element-definition ((e <xml-schema-element>))
+  `(define-xml-type ,(string->symbol (->scheme-class-name (schema-name e) #f))
+     (,(->scheme-type (schema-type e))) ()
+     :element-type ,(->scheme-type (schema-type e))
+     :element-name ,(string->symbol (schema-name e))
+     :namespace ,(schema-namespace e))
+  )
+
+;; TODO, seems not needed though...
+(define (order types) types)
 
 (define (read-from-string s) (read (open-string-input-port s)))
-
-(define (->simple-defs name&type)
-  `(define ,(car name&type) ,(cdr name&type)))
-
-;; sort the defined classed by dependency
-;; base class and slot type first then actual
-;; basically xsd can't extends 2 types.
-(define (defined-name def) (cadr def))
-(define (defined-parent-class def) (caddr def))
-(define (defined-slots def) (cadddr def))
-(define (sort-class class-defs simples)
-  (define simple-names (map cadr simples))
-  (define (extract-dependencies def)
-    (let ((slot-defs (defined-slots def)))
-      `(,(defined-name def)
-	,@(defined-parent-class def))))
-  ;; remove resolved dependency
-  (define (update-dependency deps removes)
-    (filter-map
-     (lambda (dep) (and (not (null? (cdr dep))) dep))
-     (dolist (dep deps deps)
-       (set-cdr! dep (filter-map (lambda (d) (and (not (memq d removes)) d))
-				 (cdr dep))))))
-  (let ((deps (filter-map (lambda (def)
-			    (let ((d (extract-dependencies def)))
-			      (and (not (null? (cdr d))) d)))
-			  class-defs)))
-    (let loop ((rest class-defs)
-	       (deps (update-dependency deps '()))
-	       (acc '()))
-      (if (null? deps)
-	  (reverse! `(,@rest . ,acc))
-	  (let ((acc (fold-right (lambda (def knil)
-				   (cond ((assq (defined-name def) deps) knil)
-					 (else (cons def knil))))
-				 acc rest))
-		(rest (filter-map (lambda (def)
-				    (and (assq (defined-name def) deps) def))
-				  rest)))
-	    (loop rest (update-dependency deps (map defined-name acc)) acc))))
-    ))
-
 (define (main args)
   (with-args (cdr args)
       ((library-name (#\l "library") #t #f)
@@ -282,27 +302,24 @@
     (unless (file-exists? (car rest))
       (format (current-error-port) "given file does not exist ~a" (car rest))
       (exit -1))
-    (let* ((xsd (parse-xsd-file (car rest) :locator (fixup-locator includes)))
-	   (out (or (and output (open-file-output-port output 
-						       (file-options no-fail)
-						       (buffer-mode block)
-						       (native-transcoder)))
-		    (current-output-port)))
-	   (defs (filter-map (cut generate <>) xsd)))
-      ;; defs = ((define-xml-type ...) ...)
-      (let* ((simples (map ->simple-defs (~ (*context*) 'simple-types)))
-	     (only-defs `(,@simples
-			  ,@(sort-class 
-			     `(,@(append-map values defs)
-			       ,@(~ (*context*) 'scheme-classes)) simples))))
-	(if library-name
-	    (pp `(library ,(read-from-string library-name)
-		     (export ,@(map cadr only-defs))
-		     (import (rnrs) (text sxml xsd))
-		   ,@only-defs)
-		out)
-	    (begin
-	      (pp '(import (rnrs) (text sxml xsd)) out)
-	      (pp `(begin ,@only-defs) out)))))
-    )
-)
+    (let1 xsd (parse-xsd-file (car rest) :locator (fixup-locator includes))
+      (let-values (((types elements) (collect xsd)))
+	(let ((type-defs (map generate-type-definition (order types)))
+	      (element-defs (map generate-element-definition elements))
+	      (out (or (and output (open-file-output-port output 
+							  (file-options no-fail)
+							  (buffer-mode block)
+							  (native-transcoder)))
+		       (current-output-port))))
+	  (if library-name
+	      (pp `(library ,(read-from-string library-name)
+		       (export ,@(map cadr type-defs)
+			       ,@(map cadr element-defs))
+		       (import (rnrs) (text sxml xsd))
+		     ,@type-defs
+		     ,@element-defs)
+		  out)
+	      (begin
+		(pp '(import (rnrs) (text sxml xsd)) out)
+		(for-each (cut pp <> out) type-defs)
+		(for-each (cut pp <> out) element-defs))))))))

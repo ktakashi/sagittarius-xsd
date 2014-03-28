@@ -310,8 +310,8 @@
   (define-method xml-value->primitive ((type (eql :date)) v)
     (string->date (car v) "~Y-~m-~d"))
   (define-method xml-value->primitive ((type (eql :dateTime)) v)
-    ;; Fixme lack of millisecond
-    (string->date (car v) "~Y-~m-~dT~H:~M:~S.~z"))
+    ;; use ~6 extension for Sagittarius. Fuck!!!
+    (string->date (car v) "~6"))
 
   ;; well...
   (define-method xml-attribute->primitive ((type <keyword>) v)

@@ -546,6 +546,22 @@
       (set! (~ ch 'children) children)
       (call-next-method)))
 
+  (define-method handle-schema-elements ((p <xml-schema-element>)
+					 sxml namespace opts)
+    (call-next-method)
+    (let ((attrs (sxml:attr-list-node sxml)))
+      (set! (~ p 'nillable) (sxml:attr-from-list attrs 'nillable))
+      (set! (~ p 'min-occurs) 
+	    (or (let1 m (sxml:attr-from-list attrs 'minOccurs)
+		  (and m (string->number m))) 1))
+      (set! (~ p 'max-occurs) 
+	    (or (and-let* ((m (sxml:attr-from-list attrs 'maxOccurs)))
+		  (if (string=? m "unbounded")
+		      'unbounded
+		      (string->number m)))
+		1))
+      p))
+
   ;; element proxy
   (define-method handle-schema-elements ((p <xml-schema-element-proxy>)
 					 sxml namespace opts)

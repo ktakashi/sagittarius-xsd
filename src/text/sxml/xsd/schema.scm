@@ -70,6 +70,7 @@
 	    <xsd-selector>
 	    <xsd-field>
 
+	    schema-source
 	    ;; accessors
 	    schema-target-namespace
 	    schema-name
@@ -104,8 +105,7 @@
 	    (srfi :13 strings)
 	    (srfi :26 cut)
 	    (text sxml ssax)
-	    (text sxml tools)
-	    (pp))
+	    (text sxml tools))
 
   ;; I don't think we need 1999 and 2000/10 but *just* in case.
   (define-constant +xsd-1999-ns-uri+ "http://www.w3.org/1999/XMLSchema")
@@ -168,7 +168,8 @@
 		       :init-value #f)
      (elements :accessor schema-elements
 	       :init-keyword :elements
-	       :init-value '())))
+	       :init-value '())
+     (source :reader schema-source :init-keyword :source :init-value #f)))
   (define-method write-object ((o <xml-schema-definition>) out)
     (format out "#<xml-schema-definition target ~a, ~d elements>"
 	    (schema-target-namespace o)
@@ -338,7 +339,7 @@
 
   (define (parse-xsd-file file :key (locator file-locator))
     (call-with-input-file file
-      (cut parse-xsd <> :locator locator)))
+      (cut parse-xsd <> :locator locator :source file)))
 
   (define (parse-xsd-url url :key (locator url-locator))
     (let*-values (((scheme specific) (uri-scheme&specific url))
@@ -348,7 +349,8 @@
 					       :query query
 					       :fragment frag))))
       (if (string=? code "200")
-	  (parse-xsd (open-string-input-port body) :locator locator)
+	  (parse-xsd (open-string-input-port body) :locator locator
+		     :source url)
 	  ;; TODO raise particular condition
 	  (error 'parse-xsd-url "could not retrieve URL" url))))
 
@@ -359,7 +361,8 @@
   ;;; Middle level APIs
   ;;; this assmume all xsd namespace converted xsd: prefix
 
-  (define (sxml->schema-definitions sxml . opts)
+  (define (sxml->schema-definitions sxml :key (source #f)
+				    :allow-other-keys opts)
     (let ((content (sxml:content sxml)))
       ;; sanity check
       (when (null? content) 
@@ -373,7 +376,8 @@
 	(if (member ns +ns-list+)
 	    (let* ((target-namespace (sxml:attr top 'targetNamespace))
 		   (xsd (make <xml-schema-definition>
-			  :target-namespace target-namespace))
+			  :target-namespace target-namespace
+			  :source source))
 		   (elements (sxml:content top)))
 	      (define (xsd? o) (and (is-a? o <xml-schema-definition>) o))
 	      (define (not-xsd? o) (and (not (xsd? o)) o))
@@ -584,25 +588,25 @@
     (let* ((attrs (sxml:attr-list-node sxml))
 	   (target-namespace (or (sxml:attr-from-list attrs 'namespace)
 				 namespace))
-	   (scheme-location (sxml:attr-from-list attrs 'schemaLocation))
-	   (imported (and locator (locator scheme-location))))
+	   (schema-location (sxml:attr-from-list attrs 'schemaLocation))
+	   (imported (and locator (locator schema-location))))
       (if imported
 	  (let ((imported-xsds (parse-xsd (open-string-input-port imported)
-					  :locator locator)))
-	    (for-each (lambda (xsd)
-			(set! (~ xsd 'target-namespace) target-namespace))
-		      imported-xsds)
+					  :locator locator
+					  :source schema-location)))
+	    (set! (~ (car imported-xsds) 'target-namespace) target-namespace)
 	    imported-xsds)
 	  #f)))
 
   ;; include
   (define (sxml->include-xsd sxml namespace :key (locator #f))
     (let* ((attrs (sxml:attr-list-node sxml))
-	   (scheme-location (sxml:attr-from-list attrs 'schemaLocation))
-	   (include (and locator (locator scheme-location))))
+	   (schema-location (sxml:attr-from-list attrs 'schemaLocation))
+	   (include (and locator (locator schema-location))))
       (if include
 	  (let ((included-schemas (parse-xsd (open-string-input-port include)
-					 :locator locator)))
+					 :locator locator
+					 :source schema-location)))
 	    ;; only interested in the first XSD (the rest must be as it is)
 	    ;; for my convenience though...
 	    (append! (map (lambda (e)

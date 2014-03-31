@@ -104,7 +104,8 @@
 	    (srfi :13 strings)
 	    (srfi :26 cut)
 	    (text sxml ssax)
-	    (text sxml tools))
+	    (text sxml tools)
+	    (pp))
 
   ;; I don't think we need 1999 and 2000/10 but *just* in case.
   (define-constant +xsd-1999-ns-uri+ "http://www.w3.org/1999/XMLSchema")
@@ -376,15 +377,13 @@
 		   (elements (sxml:content top)))
 	      (let loop ((elms elements) (imported '()))
 		(if (null? elms)
-		    (if (null? (~ xsd 'elements))
-			imported
-			(cons xsd imported))
+		    (cons xsd imported)
 		    (let* ((e (car elms))
 			   (elm (invoke-handle-schema e target-namespace opts)))
 		      (cond ((pair? elm)
 			     (cond ((eq? (car elm) :imported)
 				    (loop (cdr elms) 
-					  `(,@(cdr elm) ,@imported)))
+					  `(,@(cdr elm) . ,imported)))
 				   ((eq? (car elm) :included-part)
 				    (set! (~ xsd 'elements)
 					  (append! (cdr elm)
@@ -599,12 +598,12 @@
       (if include
 	  (let ((included-schemas (parse-xsd (open-string-input-port include)
 					 :locator locator)))
-	    (map (lambda (e)
-		   (when (or (is-a? e <xml-schema-element>)
-			     (is-a? e <xsd-type>))
-		     (schema-namespace e target-namespace))
-		   e)
-		 (map schema-elements included-schemas)))
+	    (append-map (lambda (e)
+			  (when (or (is-a? e <xml-schema-element>)
+				    (is-a? e <xsd-type>))
+			    (schema-namespace e target-namespace))
+			  e)
+			(map schema-elements included-schemas)))
 	  #f)))
 
   ;; internal parser

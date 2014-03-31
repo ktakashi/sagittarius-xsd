@@ -138,7 +138,8 @@
 
 (define-method traverse ((e <xsd-simple-type>))
   (make <simple-type> :name (generate-name e) :full-name (full-name e)
-	:element e))
+	:element e :parent (and-let* (( (not (null? (*parents*))) ))
+			     (car (*parents*)))))
 
 (define-method traverse ((e <xsd-complex-type>))
   (define (get-min&max)
@@ -148,7 +149,17 @@
 	  (let1 e (car parents)
 	    (list :min-occurs (schema-min-occurs e)
 		  :max-occurs (schema-max-occurs e))))))
-  (let ((contents (filter-map traverse (~ e 'children)))
+  ;; make sure all sequence/choice element will be flatten
+  (define (flatten contents)
+    (if (and (pair? contents) (pair? (car contents)))
+	;; means the contents is sequence
+	(let loop ((contents (car contents)) (r '()))
+	  (cond ((null? contents) (reverse! r))
+		((pair? (car contents))
+		 (loop (cdr contents) `(,@(reverse! (car contents)) ,@r)))
+		(else (loop (cdr contents) (cons (car contents) r)))))
+	contents))
+  (let ((contents (flatten (filter-map traverse (~ e 'children))))
 	(name     (generate-name e))
 	(full-name (full-name e)))
     (rlet1 r (apply make <complex-type> :name name 
@@ -228,6 +239,11 @@
       ,@(if (eq? (string->symbol name) elm-name) '() `(:element-name ,elm-name))
       :element-type ,(list (->scheme-type type) min max))))
 
+(define (split-name name) (car (last-pair (string-split name #/\./))))
+;; for only debug
+(define-method generate-content (e)
+  (call-next-method))
+
 (define-method generate-content ((e <xml-schema-element>))
   (let1 name (->scheme-name (schema-name e))
     (%generate-content name e (schema-type e)
@@ -236,9 +252,18 @@
 ;; nested annonymous types
 (define-method generate-content ((e <complex-type>))
   ;; make slot name short...
-  (%generate-content (car (last-pair (string-split (~ e 'name) #/\./)))
+  (%generate-content (split-name (~ e 'name))
 		     (~ e 'parent) (~ e 'name)
 		     (~ e 'min-occurs) (~ e 'max-occurs)))
+
+(define-method generate-content ((e <simple-type>))
+  ;; for now only restriction
+  (let1 children (schema-children (~ e 'element))
+    (unless (and (not (null? children)) (is-a? (car children) <xsd-restriction>))
+      (error 'generate-content "simpleType only supprots restriction for now" e))
+    (%generate-content (split-name (~ e 'name))
+		       (~ e 'parent) (schema-base (car children))
+		       (~ e 'min-occurs) (~ e 'max-occurs))))
 
 (define-method generate-content ((e <type&element>))
   (generate-content (~ e 'type)))

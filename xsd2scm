@@ -336,9 +336,17 @@
 							  (buffer-mode block)
 							  (native-transcoder)))
 		       (current-output-port))))
+	  (define (get-name def)
+	    (and (not (eq? (car def) 'begin))
+		 (cadr def)))
+	  (define (get-nested-name def)
+	    (and (eq? (car def) 'begin)
+		 (map cadr (cdr def))))
 	  (if library-name
 	      (pp `(library ,(read-from-string library-name)
-		       (export ,@(map cadr type-defs)
+		       (export ,@(filter-map get-name type-defs)
+			       ,@(apply append 
+					(filter-map get-nested-name type-defs))
 			       ,@(map cadr element-defs))
 		       (import (rnrs) (text sxml xsd))
 		     ,@type-defs

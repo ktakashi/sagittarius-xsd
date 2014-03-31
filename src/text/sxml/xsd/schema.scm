@@ -375,6 +375,8 @@
 		   (xsd (make <xml-schema-definition>
 			  :target-namespace target-namespace))
 		   (elements (sxml:content top)))
+	      (define (xsd? o) (and (is-a? o <xml-schema-definition>) o))
+	      (define (not-xsd? o) (and (not (xsd? o)) o))
 	      (let loop ((elms elements) (imported '()))
 		(if (null? elms)
 		    (cons xsd imported)
@@ -385,10 +387,15 @@
 				    (loop (cdr elms) 
 					  `(,@(cdr elm) . ,imported)))
 				   ((eq? (car elm) :included-part)
+				    ;; included-part may contains
+				    ;; xsds which are *imported*
 				    (set! (~ xsd 'elements)
-					  (append! (cdr elm)
-						   (~ xsd 'elements)))
-				    (loop (cdr elms) imported))
+					  (append!
+					   (filter-map not-xsd? (cdr elm))
+					   (~ xsd 'elements)))
+				    (loop (cdr elms) 
+					  `(,@(filter-map xsd? (cdr elm)) 
+					    . ,imported)))
 				   (else
 				    (error 'internal "parse error"))))
 			    (elm 
@@ -591,19 +598,20 @@
   ;; include
   (define (sxml->include-xsd sxml namespace :key (locator #f))
     (let* ((attrs (sxml:attr-list-node sxml))
-	   (target-namespace (or (sxml:attr-from-list attrs 'namespace)
-				 namespace))
 	   (scheme-location (sxml:attr-from-list attrs 'schemaLocation))
 	   (include (and locator (locator scheme-location))))
       (if include
 	  (let ((included-schemas (parse-xsd (open-string-input-port include)
 					 :locator locator)))
-	    (append-map (lambda (e)
-			  (when (or (is-a? e <xml-schema-element>)
-				    (is-a? e <xsd-type>))
-			    (schema-namespace e target-namespace))
-			  e)
-			(map schema-elements included-schemas)))
+	    ;; only interested in the first XSD (the rest must be as it is)
+	    ;; for my convenience though...
+	    (append! (map (lambda (e)
+			   (when (or (is-a? e <xml-schema-element>)
+				     (is-a? e <xsd-type>))
+			     (schema-namespace e namespace))
+			   e)
+			 (schema-elements (car included-schemas)))
+		     (cdr included-schemas)))
 	  #f)))
 
   ;; internal parser

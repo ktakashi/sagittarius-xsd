@@ -211,10 +211,11 @@
 		 (loop (cdr elements)
 		       (cons r types)
 		       (cons r stray-elements)))
-		(else
-		 ;; it's stray
+		(r ;; it's stray
 		 (loop (cdr elements)
-		       types (cons r stray-elements))))))))
+		       types (cons r stray-elements)))
+		(else (loop (cdr elements)
+		       types stray-elements)))))))
 
 ;; we don't care this
 (define-method generate-type-definition (type) #f)
@@ -328,6 +329,7 @@
       (format (current-error-port) "given file does not exist ~a" (car rest))
       (exit -1))
     (let1 xsd (parse-xsd-file (car rest) :locator (fixup-locator includes))
+      (pp xsd)
       (let-values (((types elements) (collect xsd)))
 	(let ((type-defs (map generate-type-definition (order types)))
 	      (element-defs (map generate-element-definition elements))

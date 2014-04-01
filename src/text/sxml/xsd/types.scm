@@ -31,8 +31,13 @@
 #!read-macro=sagittarius/regex
 (library (text sxml xsd types)
     (export define-xml-type
-	    marshall-xml marshall-sxml
-	    unmarshall-xml unmarshall-sxml
+	    marshal-xml marshal-sxml
+	    unmarshal-xml unmarshal-sxml
+	    ;; for backward compatibility
+	    (rename (marshal-xml    marshall-xml)
+		    (marshal-sxml   marshall-sxml)
+		    (unmarshal-xml  unmarshall-xml)
+		    (unmarshal-sxml unmarshall-sxml))
 
 	    ;; for user customisation
 	    xml-value->primitive
@@ -64,7 +69,7 @@
   (define-syntax define-xml-type
     (lambda (x)
       ;; we are adding meta information to slot definition
-      ;; so that marshall and unmarshall can see what needs
+      ;; so that marshal and unmarshal can see what needs
       ;; to be there and done.
       (define (parse-slots k slots attr?)
 	(define (remove-name&type slot name type)
@@ -158,7 +163,7 @@
 		 ((element :init-value 'elm)
 		  (namespace :init-value ns)))
 	       ;; put <xml-element> as the last CPL so that
-	       ;; we can check if the class is marshall/unmarshall-able
+	       ;; we can check if the class is marshal/unmarshal-able
 	       (define-class name (parents ...)
 		 ;; for my convenience attribute first then other elements
 		 (attr-defs ... slot-defs ...)
@@ -203,11 +208,11 @@
     (let-values (((attr v) (primitive->xml-value :dateTime value)))
       (values `((,+instance:type+ ,(string-append +xs-ns+ ":dateTime")))
 	      v)))
-  ;; if it's not, try unmarshall the value. this must be something
+  ;; if it's not, try unmarshal the value. this must be something
   ;; unmashallable
   (define-method primitive->xml-value ((type (eql :anyType)) value)
     (let ((class (class-of value))
-	  (v (unmarshall-sxml value)))
+	  (v (unmarshal-sxml value)))
       (values `((,+instance:type+ 
 		 ,(symbol->string (convert-name (~ class 'element) class))))
 	      ;; we don't need *TOP* and the top most element
@@ -223,7 +228,7 @@
 	  localname)))
 
   ;; convert to SXML
-  (define (unmarshall-element name element)
+  (define (unmarshal-element name element)
     (define (resolve-name s)
       (let ((slot-name (slot-definition-name s)))
 	(values slot-name (slot-definition-option s :element-name slot-name))))
@@ -233,7 +238,7 @@
 	      (slot-definition-option s :max)))
     (let ((class (class-of element)))
       (unless (is-a? class <xml-element>)
-	(error 'unmarshall "given element is not unmarshallable" element))
+	(error 'unmarshal "given element is not unmarshallable" element))
 
       (let* ((slots (class-slots class))
 	     (attr  (filter-map
@@ -270,14 +275,14 @@
 		 (let ((n (length elems)))
 		   ;; if length returns negative number then this is not a list
 		   (when (negative? n)
-		     (error 'unmarshall-element
+		     (error 'unmarshal-element
 			    "the valus must be a list for maxOccur > 1" elems))
 		   (when (< n min)
-		     (error 'unmarshall-element 
+		     (error 'unmarshal-element 
 			    "the element is less than minOccur" 
 			    `(min ,min) elems))
 		   (when (and (not (eq? max 'unbounded)) (> n max))
-		     (error 'unmarshall-element 
+		     (error 'unmarshal-element 
 			    "the element is more than maxOccur" 
 			    `(man ,man) elems))
 		   #t))
@@ -289,7 +294,7 @@
 		       (if (or (eq? max 'unbounded) (> max 1))
 			   (and (check-element-count value min max)
 				`(,@(map (lambda (v) 
-					   (unmarshall-element 
+					   (unmarshal-element 
 					    (convert-name name class) v))
 					 value) ,@knil))
 			   (cond ((keyword? type)
@@ -302,27 +307,27 @@
 				       ,@(if (pair? v) v (list v)))
 				     knil)))
 				 ((is-a? (class-of value) <xml-element>)
-				  (cons (unmarshall-element
+				  (cons (unmarshal-element
 					 (convert-name name class)
 					 value)
 					knil))
 				 (else
-				  (error 'unmarshall-element
+				  (error 'unmarshal-element
 					 "unknown element" value)))))
 		     (or (and (zero? min) '())
-			 (error 'unmarshall-element
+			 (error 'unmarshal-element
 				"element must be presented!" name)))))
 	     '() elems)))))
 
-  (define (unmarshall-sxml element)
+  (define (unmarshal-sxml element)
     (let ((class (class-of element)))
       (unless (is-a? class <xml-element>)
-	(error 'unmarshall "given element is not unmarshallable" element))
+	(error 'unmarshal "given element is not unmarshallable" element))
       ;; make sure the top most level has *TOP* for proper SXML.
       (list '*TOP*
-       (unmarshall-element (convert-name (~ class 'element) class) element))))
+       (unmarshal-element (convert-name (~ class 'element) class) element))))
   ;; keyword arguments are more for debugging or so...
-  (define (unmarshall-xml element :key 
+  (define (unmarshal-xml element :key 
 			  (indent #f)
 			  (ns-prefix-assig srl:conventional-ns-prefixes))
     (define (collect-all-namespace xml)
@@ -335,7 +340,7 @@
 		     (values (acons +xs-ns+ "xsd" r) #t))
 		    (else (values r #f)))))))
     ;; this is safer so that it doesn't have any unwanted spaces
-    (let1 xml (srl:sxml->string (unmarshall-sxml element) '() indent 'xml
+    (let1 xml (srl:sxml->string (unmarshal-sxml element) '() indent 'xml
 				    ns-prefix-assig #t 'omit "1.0")
       ;; fixup some namespace in its attributes...
       (let-values (((namespaces need-xs?) (collect-all-namespace xml)))
@@ -389,18 +394,18 @@
     (xml-value->primitive type (list v)))
 
   ;; need to take class to know which object we need to construct
-  (define (marshall-sxml class sxml . contexts)
+  (define (marshal-sxml class sxml . contexts)
     (define (check-namespace element ncname namespace)
       (let ((ns (sxml:name->ns-id (sxml:name element))))
 	(or (and (equal? ns namespace) ;; ns and namespace can be #f
 		 (string=? (symbol->string ncname) (sxml:ncname element)))
-	    (error 'marshall-sxml 
+	    (error 'marshal-sxml 
 		   "element does not belong to the proper namespace" 
 		   ns ncname namespace
 		   element
 		   sxml))))
 
-    (define (marshall-rec o class root-element)
+    (define (marshal-rec o class root-element)
       (let ((content (sxml:content root-element))
 	    (namespace (~ class 'namespace)))
 	(define (get-name s)
@@ -417,7 +422,7 @@
 		  (use  (get-use s))
 		  (attr (sxml:attr root-element (get-name s))))
 	     (when (and (eq? use :required) (not attr))
-	       (error 'marshall-sxml
+	       (error 'marshal-sxml
 		      "mandatory attribute is missing" 
 		      (get-name s) root-element))
 	     (when attr
@@ -425,7 +430,7 @@
 			    (xml-attribute->primitive type attr)
 			    ;; must be a class
 			    (let ((o (make type))) 
-			      (marshall-rec o type attr)))))
+			      (marshal-rec o type attr)))))
 		 (set! (~ o slot-name) v)))))
 	 (filter-map (lambda (s)
 		       (and (slot-definition-option s :attribute #f)
@@ -460,10 +465,10 @@
 	   (define (check-element-count elems min max full-name)
 	     (let ((n (length elems)))
 	       (when (< n min)
-		 (error 'marshall-sxml "too less elements"
+		 (error 'marshal-sxml "too less elements"
 			`((min ,min) (max ,max)) elems full-name))
 	       (when (and (not (eq? max 'unbounded)) (> n max))
-		 (error 'marshall-sxml "too many elements"
+		 (error 'marshal-sxml "too many elements"
 			`((min ,min) (max ,max)) elems full-name))))
 	   (let* ((ncname (get-name s))
 		  (slot-name (slot-definition-name s))
@@ -482,22 +487,22 @@
 				 (let* ((attr (sxml:attr e +instance:type+))
 					(type (extract-type attr type)))
 				   (unless type
-				     (error 'marshall-sxml "unknown type"
+				     (error 'marshal-sxml "unknown type"
 					    attr))
 				   (if (keyword? type)
 				       (xml-value->primitive type (sxml:content e))
 				       (let ((o (make type)))
-					 (marshall-rec o type e)))))
+					 (marshal-rec o type e)))))
 			       e)
 			  ;; must be a class
 			  (map (lambda (e)
 				 (unless (is-a? type <xml-element>)
-				   (error 'marshall
+				   (error 'marshal
 					  "given class is not marshallable"
 					  type))
 				 (let* ((type (get-real-type type e))
 					(o (make type)))
-				   (marshall-rec o type e)))
+				   (marshal-rec o type e)))
 			       e))))
 	       ;; check min max
 	       (check-element-count v min max full-name)
@@ -512,17 +517,17 @@
 			    s)) (class-slots class)))
 	o))
     (unless (is-a? class <xml-element>)
-      (error 'marshall "given class is not marshallable" class))
+      (error 'marshal "given class is not marshallable" class))
     (let ((o (make class)))
       ;; assume *TOP* is there!
       (let ((root-element (car (sxml:content sxml)))
 	    (element (~ class 'element))
 	    (namespace (~ class 'namespace)))
 	(check-namespace root-element element namespace)	
-	(marshall-rec o class root-element))))
+	(marshal-rec o class root-element))))
 
-  (define (marshall-xml class xml . contexts)
-    (apply marshall-sxml class (%ssax:xml->sxml (open-string-input-port xml) '())
+  (define (marshal-xml class xml . contexts)
+    (apply marshal-sxml class (%ssax:xml->sxml (open-string-input-port xml) '())
 	   contexts))
 
   ;; internal parser...

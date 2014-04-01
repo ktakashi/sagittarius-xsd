@@ -2,7 +2,7 @@
 	(srfi :19)
 	(srfi :26)
 	(srfi :64)
-	(text sxml ssax) (text sxml xsd))
+	(text sxml ssax) (text sxml xsd) (pp))
 
 (define-xml-type <request> ()
   ((name   :element-type :string :init-keyword :n)
@@ -26,8 +26,8 @@
 	      `(*TOP*
 		(http://sagittarius-scheme.com/types:Request 
 		 (@)
-		 (http://sagittarius-scheme.com/types:name "Takashi")
-		 (http://sagittarius-scheme.com/types:Expiry
+		 (http://sagittarius-scheme.com/types:name (@) "Takashi")
+		 (http://sagittarius-scheme.com/types:Expiry (@)
 		  ,(date->string (current-date) "~Y-~m-~d"))))
 	      (unmarshall-sxml req))
   (test-equal "unmarshall (2)"
@@ -36,8 +36,8 @@
 		 (@)
 		 (http://sagittarius-scheme.com/services:GRequest 
 		  (@)
-		  (http://sagittarius-scheme.com/types:name "Takashi")
-		  (http://sagittarius-scheme.com/types:Expiry
+		  (http://sagittarius-scheme.com/types:name (@) "Takashi")
+		  (http://sagittarius-scheme.com/types:Expiry (@)
 		   ,(date->string (current-date) "~Y-~m-~d")))))
 	      (unmarshall-sxml (make <get-info> :req (list req)))))
 
@@ -50,8 +50,8 @@
 		 (@)
 		 (http://sagittarius-scheme.com/services:GRequest 
 		  (@)
-		  (http://sagittarius-scheme.com/types:name "Takashi")
-		  (http://sagittarius-scheme.com/types:Expiry
+		  (http://sagittarius-scheme.com/types:name (@) "Takashi")
+		  (http://sagittarius-scheme.com/types:Expiry (@)
 		   ,(date->string (current-date) "~Y-~m-~d")))))))
     (test-equal "marshall (2)"
 		sxml

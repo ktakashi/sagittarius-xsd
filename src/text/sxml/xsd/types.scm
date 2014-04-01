@@ -356,10 +356,13 @@
 		    (let ((ns (car namespaces)))
 		      ;; for now very naive one check only type
 		      (regex-replace-all 
-		       (regex (string-append "type=\"" (car ns) ":(\\w*)")) xml 
+		       (regex (string-append "type=\"" (car ns) ":(\\w*)\"")) xml 
 		       (lambda (m)
-			 (string-append "type=\"" (cdr ns) ":" (m 1)
-					"\" xmlns:" (cdr ns) "=\"" (car ns))))))
+			 (let ((ext (format "xmlns:~a=\"~a\"" (cdr ns) (car ns)))
+			       (s (format "type=\"~a:~a\"" (cdr ns) (m 1))))
+			   (if (string-contains xml ext)
+			       s
+			       (string-append s " " ext)))))))
 	      )))))
 
   (define-method xml-value->primitive ((type (eql :string)) v)

@@ -59,6 +59,7 @@
 	    <xsd-all>
 	    <xsd-wildcard>
 	    <xsd-any>
+	    <xsd-any-attribute>
 	    <xsd-restriction>
 	    <xsd-extension>
 	    <xsd-attribute>
@@ -69,6 +70,8 @@
 	    <xsd-keyref>
 	    <xsd-selector>
 	    <xsd-field>
+	    ;; list
+	    <xsd-list>
 
 	    schema-source
 	    ;; accessors
@@ -105,7 +108,8 @@
 	    (srfi :13 strings)
 	    (srfi :26 cut)
 	    (text sxml ssax)
-	    (text sxml tools))
+	    (text sxml tools)
+	    (pp))
 
   ;; I don't think we need 1999 and 2000/10 but *just* in case.
   (define-constant +xsd-1999-ns-uri+ "http://www.w3.org/1999/XMLSchema")
@@ -247,7 +251,7 @@
 	 'schema-name "Element is not yet resolved to base element." o)))
   (define-method write-object ((o <xml-schema-element-proxy>) out)
     (format out "#<xml-schema-element-proxy ~a~a>"
-	    (or (schema-name o) "anonymous")
+	    (or (~ o 'name) "anonymous")
 	    (if (schema-resolved-status o)
 		" (resolved)"
 		"")))
@@ -276,6 +280,7 @@
   (define-class <xsd-any> (<xsd-wildcard> <multiplicity-mixin>)
     ((process-contents :accessor schema-process-contents
 		       :init-keyword :process-contents :init-value #f)))
+  (define-class <xsd-any-attribute> (<xsd-any>) ())
 
   ;; TODO handle inside of the restriction...
   (define-class <xsd-restriction> ()
@@ -294,12 +299,13 @@
      (use :accessor schema-use :init-keyword :use :init-value #f)
      (default :accessor schema-default :init-keyword :default :init-value #f)
      (fixed :accessor schema-fixed :init-keyword :fixed :init-value #f)))
-
   (define-method write-object ((o <xsd-attribute>) out)
     (format out "#<xsd-attribute ~a>"
 	    (or (schema-name o) "anonymous")))
 
-  (define-class <xsd-attribute-group> (<xsd-type>) ())
+  (define-class <xsd-attribute-group> (<children-mixin>) 
+    ((name :accessor schema-name :init-keyword :name :init-value #f)
+     (ref  :accessor schema-ref :init-keyword :ref :init-value #f)))
   (define-method write-object ((o <xsd-attribute-group>) out)
     (format out "#<xsd-attribute-group ~a:~d>"
 	    (or (schema-name o) "anonymous")
@@ -309,13 +315,17 @@
   (define-class <xsd-unique> (<xsd-type>) ())
   (define-class <xsd-key> (<xsd-type>)())
   (define-class <xsd-keyref> (<xsd-type>)
-    ((refer :accessor schema-refer :init-keyword :name :init-value #f)))
+    ((refer :accessor schema-refer :init-keyword :refer :init-value #f)))
 
   (define-class <xsd-selector> ()
-    ((xpath :accessor schema-xpath :init-keyword :name :init-value #f)))
+    ((xpath :accessor schema-xpath :init-keyword :xpath :init-value #f)))
 
   (define-class <xsd-field> ()
-    ((xpath :accessor schema-xpath :init-keyword :name :init-value #f)))
+    ((xpath :accessor schema-xpath :init-keyword :xapth :init-value #f)))
+
+  (define-class <xsd-list> (<xsd-type>)
+    ((item-type :accessor schema-item-type :init-keyword :item-type 
+		:init-value #f)))
 
   ;;;;; APIs
 
@@ -383,7 +393,8 @@
 	      (define (not-xsd? o) (and (not (xsd? o)) o))
 	      (let loop ((elms elements) (imported '()))
 		(if (null? elms)
-		    (cons xsd imported)
+		    (rlet1 r (cons xsd imported)
+		      (resolve-schemas r))
 		    (let* ((e (car elms))
 			   (elm (invoke-handle-schema e target-namespace opts)))
 		      (cond ((pair? elm)
@@ -470,6 +481,15 @@
 		   :fixed fixed)))
       (handle-schema-elements attr elms namespace opts)))
 
+  ;; attributeGroup
+  (define-method handle-schema ((name (eql :attributeGroup))
+				elms namespace opts)
+    (let* ((attrs (sxml:attr-list-node elms))
+	   (name (sxml:attr-from-list attrs 'name))
+	   (ref (sxml:attr-from-list attrs 'ref))
+	   (group (make <xsd-attribute-group> :name name :ref ref)))
+      (handle-schema-elements group elms namespace opts)))
+
   ;; sequence
   (define-method handle-schema ((name (eql :sequence)) elms namespace opts)
     (handle-schema-elements (make <xsd-sequence>) elms namespace opts))
@@ -498,6 +518,8 @@
   ;; any
   (define-method handle-schema ((name (eql :any)) elms namespace opts)
     (let* ((pc (sxml:attr elms 'processContents))
+	   (min (sxml:attr elms 'minOccurs))
+	   (max (sxml:attr elms 'maxOccurs))
 	   (any (make <xsd-any>
 		  :process-contents (case (and pc (string->symbol pc))
 				      ((skip) :skip)
@@ -505,6 +527,14 @@
 				      (else :strict)))))
       (handle-schema-elements any elms namespace opts)))
 
+  (define-method handle-schema ((name (eql :anyAttribute)) elms namespace opts)
+    (let* ((pc (sxml:attr elms 'processContents))
+	   (any (make <xsd-any-attribute>
+		  :process-contents (case (and pc (string->symbol pc))
+				      ((skip) :skip)
+				      ((lax)  :lax)
+				      (else :strict)))))
+      (handle-schema-elements any elms namespace opts)))
   ;; import
   (define-method handle-schema ((name (eql :import)) elms namespace opts)
     (and-let* ((imported (apply sxml->imported-xsd elms namespace opts)))
@@ -538,6 +568,11 @@
     (handle-schema-elements (make <xsd-field> :xpath (sxml:attr elms 'xpath))
 			    elms namespace opts))
 
+  (define-method handle-schema ((name (eql :list)) elms namespace opts)
+    (handle-schema-elements 
+     (make <xsd-list> :item-type (sxml:attr elms 'itemType))
+     elms namespace opts))
+
   ;; ignorable elements
   ;; annnoation
   (define-method handle-schema ((name (eql :annotation)) elms namespace opts)
@@ -556,21 +591,30 @@
       (set! (~ ch 'children) children)
       (call-next-method)))
 
-  (define-method handle-schema-elements ((p <xml-schema-element>)
+  (define-method handle-schema-elements ((p <multiplicity-mixin>)
+					 sxml namespace opts)
+    (call-next-method)
+    (let ((attrs (sxml:attr-list-node sxml)))
+      (when attrs
+	(set! (~ p 'min-occurs) 
+	      (or (let1 m (sxml:attr-from-list attrs 'minOccurs)
+		    (and m (string->number m))) 1))
+	(set! (~ p 'max-occurs) 
+	      (or (and-let* ((m (sxml:attr-from-list attrs 'maxOccurs)))
+		    (if (string=? m "unbounded")
+			'unbounded
+			(string->number m)))
+		  1)))
+      p))
+  (define-method handle-schema-elements ((p <nillable-multiplicity-mixin>)
 					 sxml namespace opts)
     (call-next-method)
     (let ((attrs (sxml:attr-list-node sxml)))
       (set! (~ p 'nillable) (sxml:attr-from-list attrs 'nillable))
-      (set! (~ p 'min-occurs) 
-	    (or (let1 m (sxml:attr-from-list attrs 'minOccurs)
-		  (and m (string->number m))) 1))
-      (set! (~ p 'max-occurs) 
-	    (or (and-let* ((m (sxml:attr-from-list attrs 'maxOccurs)))
-		  (if (string=? m "unbounded")
-		      'unbounded
-		      (string->number m)))
-		1))
       p))
+  (define-method handle-schema-elements ((p <xml-schema-element>)
+					 sxml namespace opts)
+    (call-next-method))
 
   ;; element proxy
   (define-method handle-schema-elements ((p <xml-schema-element-proxy>)
@@ -581,6 +625,49 @@
       (set! (~ p 'min-occurs-is-local) (sxml:attr-from-list attrs 'minOccurs))
       (set! (~ p 'max-occurs-is-local) (sxml:attr-from-list attrs 'maxOccurs))
       p))
+
+  ;; resolve proxy
+  (define (resolve-schemas xsds)
+    (dolist (xsd xsds)
+      (for-each (cut resolve-element <> xsds) (schema-elements xsd))))
+
+  (define (schema-element-named xsd name)
+    (define (find-item-named name elements)
+      (define (full-name e)
+	(let1 ns (schema-namespace e)
+	  (if ns
+	      (format "~a:~a" ns (schema-name e))
+	      (schema-name e))))
+      (find (lambda (e) 
+	      (and (is-a? e <xml-schema-element>)
+		   (equal? name (full-name e)))) elements))
+    (find-item-named name (schema-elements xsd)))
+
+  (define-method resolve-element (e xsds) #t) ;; ignore
+  (define-method resolve-element ((e <children-mixin>) xsds)
+    (for-each (cut resolve-element <> xsds) (schema-children e)))
+  (define-method resolve-element ((e <xml-schema-element-proxy>) xsds)
+    (unless (schema-resolved-status e)
+      (let1 ref (schema-ref e)
+	(define (search ref xsds)
+	  (let loop ((xsds xsds))
+	    (if (null? xsds)
+		#f ;; should this be an error?
+		(or (schema-element-named (car xsds) ref)
+		    (loop (cdr xsds))))))
+	(let1 elt (search ref xsds)
+	  (schema-resolved-status e elt)
+	  (dolist (child (schema-children elt))
+	    (when child (resolve-element child xsds)))
+	  (schema-name e (schema-name elt))
+	  (schema-type e (schema-type elt))
+	  (schema-children e (schema-children elt))
+	  (unless (schema-min-occurs-is-local e)
+	    (schema-min-occurs e (schema-min-occurs elt)))
+	  (unless (schema-max-occurs-is-local e)
+	    (schema-max-occurs e (schema-max-occurs elt)))
+	  (unless (schema-nillable-is-local e)
+	    (schema-nillable e (schema-nillable elt)))))))
 
   ;;;;  Internal
   ;; import
@@ -625,7 +712,7 @@
     ;; the attribute which value needs to be qualified.
     ;; say 'name', 'id' and so on should not be but 'type'
     ;; TODO, not sure which one should be other than 'type' and 'base'.
-    (define qualified '(type base))
+    (define qualified '(type base ref))
     (letrec
 	((namespaces
 	  (map (lambda (el)

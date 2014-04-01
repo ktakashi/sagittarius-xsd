@@ -95,6 +95,7 @@
   ((contents :init-keyword :contents)
    (super    :init-keyword :super)))
 (define-class <simple-type> (<type>) ())
+(define-class <any-type> (<type>) ())
 
 (define-class <type&element> ()
   ((type :init-keyword :type)
@@ -131,6 +132,10 @@
 
 ;; TODO consider attributes
 (define-method traverse (e) #f) ;; default
+
+(define-method traverse ((e <xsd-any>))
+  (make <any-type> :name (schema-name e) :element e
+	:full-name (full-name e)))
 
 (define-method traverse ((e <xsd-extension>))
   ;; TODO should we handle missing type??
@@ -240,7 +245,7 @@
 	 ,simple-type))))
 
 (define (%generate-content name e type min max)
-  (let1 elm-name (string->symbol (schema-name e))
+  (let1 elm-name (string->symbol (or (schema-name e) "any"))
     `(,(string->symbol name)
       :init-keyword ,(->keyword name)
       ,@(if (eq? (string->symbol name) elm-name) '() `(:element-name ,elm-name))
@@ -271,6 +276,12 @@
     (%generate-content (split-name (~ e 'name))
 		       (~ e 'parent) (schema-base (car children))
 		       (~ e 'min-occurs) (~ e 'max-occurs))))
+
+(define-method generate-content ((e <any-type>))
+  (%generate-content "any" (~ e 'element)
+		     (string-append +xsd-2001-ns-uri+ ":anyType")
+		     (schema-min-occurs (~ e 'element))
+		     (schema-max-occurs (~ e 'element))))
 
 (define-method generate-content ((e <type&element>))
   (generate-content (~ e 'type)))
@@ -329,7 +340,7 @@
   (define (create file)
     (unless (file-exists? file)
       (let-values (((base file ext) (decompose-path file)))
-	(create-directory* base)))
+	(when base (create-directory* base))))
     file)
   (let-values (((types elements) (collect xsd)))
     (let ((type-defs (map generate-type-definition (order types)))

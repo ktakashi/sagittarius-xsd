@@ -8,4 +8,4 @@
   :type zip
   :url "https://github.com/ktakashi/sagittarius-xsd/archive/master.zip")
 
- (install (install (directories ("src" :excludes ("CMakeLists"))))))
+ (install (directories ("src" :excludes ("CMakeLists")))))

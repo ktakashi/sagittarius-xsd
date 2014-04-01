@@ -1,7 +1,7 @@
 # Sagittarius XSD
 
-This library provides some utilities to handle XSD and XML marshall and
-unmarshall.
+This library provides some utilities to handle XSD and XML marshal and
+unmarshal.
 
 ## XSD to Scheme
 
@@ -54,7 +54,7 @@ Following is an example how to collaborate with SOAP lite library.
                                         (make-http-transport server path))))
         (soap-send-request context
                            (soap:envelope context
-                                          (soap:body (unmarshall-xml o)))))))
+                                          (soap:body (unmarshal-xml o)))))))
 ```
 
 ## TODO

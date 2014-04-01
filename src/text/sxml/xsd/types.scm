@@ -45,6 +45,7 @@
 	    (sagittarius)
 	    (sagittarius regex)
 	    (sagittarius object)
+	    (sagittarius control)
 	    (sagittarius time) ;; for <date>
 	    (srfi :1 lists)
 	    (srfi :13 strings)
@@ -54,7 +55,8 @@
 	    (text sxml serializer)
 	    (text sxml tools)
 	    (text sxml sxpath)
-	    (text sxml ssax))
+	    (text sxml ssax)
+	    (pp))
 
   ;; marker class :)
   (define-class <xml-element> () ())
@@ -164,17 +166,55 @@
 
   ;; TODO add more primitives...
   (define-method primitive->xml-value ((type (eql :string)) value)
-    (->string value))
+    (values '() (->string value)))
+
+  (define (int32? o) (and (integer? o) (<= #x-80000000 o #x7FFFFFFF)))
+  (define-method primitive->xml-value ((type (eql :int)) value)
+    (unless (int32? value) 
+      (error 'primitive->xml-value "32 bit integer required" value))
+    (values '() (->string value)))
+  (define-method primitive->xml-value ((type (eql :integer)) value)
+    (unless (integer? value)
+      (error 'primitive->xml-value "integer required" value))
+    (values '()  (->string value)))
 
   (define-method primitive->xml-value ((type (eql :date)) (date <date>))
-    (date->string date "~Y-~m-~d"))
+    (values '() (date->string date "~Y-~m-~d")))
   ;; trust you :)
-  (define-method primitive->xml-value ((type (eql :date)) (date <string>)) date)
+  (define-method primitive->xml-value ((type (eql :date)) (date <string>)) 
+    (values '() date))
   (define-method primitive->xml-value ((type (eql :dateTime)) (date <string>))
-    date)
+    (values '() date))
+  (define-method primitive->xml-value ((type (eql :dateTime)) (date <date>))
+    (values '() (date->string date "~6")))
+
+  (define-constant +instance:type+ 
+    'http://www.w3.org/2001/XMLSchema-instance:type)
+  (define-constant +xs-ns+ "http://www.w3.org/2001/XMLSchema")
+
+  ;; if it's something we know how to do it then do it
+  (define-method primitive->xml-value ((type (eql :anyType)) (value <string>))
+    (values `((,+instance:type+ ,(string-append +xs-ns+ ":string")))
+	    value))
+  (define-method primitive->xml-value ((type (eql :anyType)) (value <integer>))
+    (values `((,+instance:type+ ,(string-append +xs-ns+ ":integer")))
+	    (->string value)))
+  (define-method primitive->xml-value ((type (eql :anyType)) (value <date>))
+    (let-values (((attr v) (primitive->xml-value :dateTime value)))
+      (values `((,+instance:type+ ,(string-append +xs-ns+ ":dateTime")))
+	      v)))
+  ;; if it's not, try unmarshall the value. this must be something
+  ;; unmashallable
+  (define-method primitive->xml-value ((type (eql :anyType)) value)
+    (let ((class (class-of value))
+	  (v (unmarshall-sxml value)))
+      (values `((,+instance:type+ 
+		 ,(symbol->string (convert-name (~ class 'element) class))))
+	      ;; we don't need *TOP* and the top most element
+	      (sxml:content (cadr v)))))
 
   (define-method primitive->xml-attribute ((type <keyword>) v)
-    (primitive->xml-value key v))
+    (let-values (((_ v) (primitive->xml-value key v))) v))
 
   (define (convert-name localname class)
     (let ((namespace (~ class 'namespace)))
@@ -220,7 +260,7 @@
 		     '()
 		     ;; use full name (i'm sick and tired of this...)
 		     (let ((name (convert-name (~ class 'element) class)))
-		       `((http://www.w3.org/2001/XMLSchema-instance:type 
+		       `((,+instance:type+
 			  ,(symbol->string name))))))
 	     )
 	  ;; elements
@@ -254,10 +294,13 @@
 					 value) ,@knil))
 			   (cond ((keyword? type)
 				  ;; primitive so resolve it now
-				  (cons
-				   `(,(convert-name name class) 
-				     ,(primitive->xml-value type value))
-				   knil))
+				  (let-values (((attr v)
+						(primitive->xml-value type value)))
+				    (cons
+				     `(,(convert-name name class) 
+				       (@ ,@attr)
+				       ,@(if (pair? v) v (list v)))
+				     knil)))
 				 ((is-a? (class-of value) <xml-element>)
 				  (cons (unmarshall-element
 					 (convert-name name class)
@@ -276,55 +319,80 @@
       (unless (is-a? class <xml-element>)
 	(error 'unmarshall "given element is not unmarshallable" element))
       ;; make sure the top most level has *TOP* for proper SXML.
-      (list
-       '*TOP*
+      (list '*TOP*
        (unmarshall-element (convert-name (~ class 'element) class) element))))
   ;; keyword arguments are more for debugging or so...
   (define (unmarshall-xml element :key 
 			  (indent #f)
-			  (ns-prefix-assig '()))
+			  (ns-prefix-assig srl:conventional-ns-prefixes))
     (define (collect-all-namespace xml)
       (let ((m (regex-matcher #/xmlns:(\w+)="([^\"]+)"/ xml)))
 	(let loop ((r '()))
 	  (if (regex-find m)
 	      (loop (acons (m 2) (m 1) r))
-	      (reverse! r)))))
+	      (cond ((assoc +xs-ns+ r) (values r #f))
+		    ((string-contains xml (string-append +xs-ns+ ":"))
+		     (values (acons +xs-ns+ "xsd" r) #t))
+		    (else (values r #f)))))))
     ;; this is safer so that it doesn't have any unwanted spaces
-    (let* ((xml (srl:sxml->string (unmarshall-sxml element) '() indent 'xml
-				  ns-prefix-assig #t 'omit "1.0"))
-	   (namespaces (collect-all-namespace xml)))
+    (let1 xml (srl:sxml->string (unmarshall-sxml element) '() indent 'xml
+				    ns-prefix-assig #t 'omit "1.0")
       ;; fixup some namespace in its attributes...
-      (let loop ((namespaces namespaces) (xml xml))
-	(if (null? namespaces)
-	    xml
-	    (loop (cdr namespaces)
-		  (let ((ns (car namespaces)))
-		    ;; for now very naive one check only type
-		    (regex-replace-all 
-		     (regex (string-append "type=\"" (car ns) "[^\"]")) xml 
-		     (lambda (m) (string-append "type=\"" (cdr ns) ":")))))))
-      ))
+      (let-values (((namespaces need-xs?) (collect-all-namespace xml)))
+	(let loop ((namespaces namespaces) 
+		   (xml (if need-xs?
+			    (regex-replace-first 
+			     #/>/ xml
+			     (string-append " xmlns:xsd=\"" +xs-ns+ "\">"))
+			    xml)))
+	  (if (null? namespaces)
+	      xml
+	      (loop (cdr namespaces)
+		    (let ((ns (car namespaces)))
+		      ;; for now very naive one check only type
+		      (regex-replace-all 
+		       (regex (string-append "type=\"" (car ns) ":(\\w*)")) xml 
+		       (lambda (m)
+			 (string-append "type=\"" (cdr ns) ":" (m 1)
+					"\" xmlns:" (cdr ns) "=\"" (car ns))))))
+	      )))))
 
   (define-method xml-value->primitive ((type (eql :string)) v)
     (car v))
   (define-method xml-value->primitive ((type (eql :date)) v)
     (string->date (car v) "~Y-~m-~d"))
   (define-method xml-value->primitive ((type (eql :dateTime)) v)
-    ;; use ~6 extension for Sagittarius. Fuck!!!
-    (string->date (car v) "~6"))
+    (string->date (car v) "~Y-~m-~dT~H:~M:~S~z"))
+
+  (define-method xml-value->primitive ((type (eql :int)) v)
+    (or (and-let* ((i (string->number (car v)))
+		   ( (int32? i) ))
+	  i)
+	(error 'xml-value->primitive "given value is not 32 bit integer"
+	       (car v))))
+  (define-method xml-value->primitive ((type (eql :integer)) v)
+    (or (and-let* ((i (string->number (car v)))
+		   ( (integer? i) ))
+	  i)
+	(error 'xml-value->primitive "given value is not integer" (car v))))
+
+  ;; well JAXB is also doing this
+  ;; and there is no way to determine other than this.
+  (define-method xml-value->primitive ((type (eql :anyType)) v)
+    (car v))
+
+  (define-method xml-value->primitive (type v)
+    (error 'xml-value->primitive "unsupported type" type v))
 
   ;; well...
   (define-method xml-attribute->primitive ((type <keyword>) v)
     (xml-value->primitive type (list v)))
 
-  (define-constant +instance:type+ 
-    'http://www.w3.org/2001/XMLSchema-instance:type)
-
   ;; need to take class to know which object we need to construct
-  (define (marshall-sxml class sxml)
+  (define (marshall-sxml class sxml . contexts)
     (define (check-namespace element ncname namespace)
       (let ((ns (sxml:name->ns-id (sxml:name element))))
-	(or (and (string=? ns namespace)
+	(or (and (equal? ns namespace) ;; ns and namespace can be #f
 		 (string=? (symbol->string ncname) (sxml:ncname element)))
 	    (error 'marshall-sxml 
 		   "element does not belong to the proper namespace" 
@@ -376,19 +444,33 @@
 			     (string=? xml-type (format "~a:~a" ns e))))
 			 subclasses))
 		 class))
-	   (define (check-element-count elems min max)
+	   (define (extract-type name type)
+	     (if name
+		 (or (and (string-prefix? +xs-ns+ name)
+			  (let* ((len (string-length name))
+				 ;; it's exported but i think it shouldn't 
+				 (pos (string-index-right name #\:)))
+			    (string->keyword (substring name (+ pos 1) len))))
+		     ;; find from context
+		     (and (not (null? contexts))
+			  (find (lambda (class)
+				  (eq? (~ class 'element) (string->symbol name)))
+				contexts)))
+		 type))
+	   (define (check-element-count elems min max full-name)
 	     (let ((n (length elems)))
 	       (when (< n min)
 		 (error 'marshall-sxml "too less elements"
-			`((min ,min) (max ,max)) elems))
+			`((min ,min) (max ,max)) elems full-name))
 	       (when (and (not (eq? max 'unbounded)) (> n max))
 		 (error 'marshall-sxml "too many elements"
-			`((min ,min) (max ,max)) elems))))
+			`((min ,min) (max ,max)) elems full-name))))
 	   (let* ((ncname (get-name s))
 		  (slot-name (slot-definition-name s))
-		  (full-name (string->symbol 
-			      (format "~a:~a" (or namespace "")
-				      ncname)))
+		  (full-name (if namespace
+				 (string->symbol 
+				  (format "~a:~a" namespace ncname))
+				 ncname))
 		  (type (get-type s))
 		  (max (get-max s))
 		  (min (get-min s))
@@ -397,7 +479,15 @@
 		      content)))
 	     (let ((v (if (keyword? type)
 			  (map (lambda (e)
-				 (xml-value->primitive type (sxml:content e)))
+				 (let* ((attr (sxml:attr e +instance:type+))
+					(type (extract-type attr type)))
+				   (unless type
+				     (error 'marshall-sxml "unknown type"
+					    attr))
+				   (if (keyword? type)
+				       (xml-value->primitive type (sxml:content e))
+				       (let ((o (make type)))
+					 (marshall-rec o type e)))))
 			       e)
 			  ;; must be a class
 			  (map (lambda (e)
@@ -410,17 +500,17 @@
 				   (marshall-rec o type e)))
 			       e))))
 	       ;; check min max
-	       (check-element-count v min max)
-	       (if (or (eq? max 'unbounded) (> max 1))
-		   (set! (~ o slot-name) v)
-		   (set! (~ o slot-name) (car v))))))
+	       (check-element-count v min max full-name)
+	       (cond ((or (eq? max 'unbounded) (> max 1))
+		      (set! (~ o slot-name) v))
+		     ((not (null? v))
+		      (set! (~ o slot-name) (car v)))))))
 	 (filter-map (lambda (s)
 		       (and (not (slot-definition-option s
 							 :attribute
 							 #f))
 			    s)) (class-slots class)))
 	o))
-
     (unless (is-a? class <xml-element>)
       (error 'marshall "given class is not marshallable" class))
     (let ((o (make class)))
@@ -431,8 +521,9 @@
 	(check-namespace root-element element namespace)	
 	(marshall-rec o class root-element))))
 
-  (define (marshall-xml class xml)
-    (marshall-sxml class (%ssax:xml->sxml (open-string-input-port xml) '())))
+  (define (marshall-xml class xml . contexts)
+    (apply marshall-sxml class (%ssax:xml->sxml (open-string-input-port xml) '())
+	   contexts))
 
   ;; internal parser...
   (define (%ssax:xml->sxml port dummy)
@@ -443,7 +534,7 @@
     ;; the attribute which value needs to be qualified.
     ;; say 'name', 'id' and so on should not be but 'type'
     ;; TODO, not sure which one should be other than 'type'
-    (define qualified '(http://www.w3.org/2001/XMLSchema-instance:type))
+    (define qualified `(,+instance:type+))
     (letrec
 	((namespaces
 	  (map (lambda (el)

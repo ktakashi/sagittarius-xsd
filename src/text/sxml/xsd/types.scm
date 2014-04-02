@@ -329,7 +329,7 @@
 			     (else
 			      (error 'unmarshal-element
 				     "unknown element" value))))
-		     (or (and (zero? min) '())
+		     (or (and (zero? min) knil)
 			 (error 'unmarshal-element
 				"element must be presented!" name)))))
 	     '() elems)))))

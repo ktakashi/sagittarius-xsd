@@ -122,11 +122,11 @@
 				(syntax->datum x)))
 	    (let ((slot (remove-name&type slot name type))
 		  (type (resolve-type (cdr slot) type)))
-	      (values slot name type))))
+	      (values slot name type any))))
 	(let loop ((slots slots) (r '()))
 	  (if (null? slots)
 	      (reverse! r)
-	      (let*-values (((slot name type) (resolve-slot (car slots))))
+	      (let*-values (((slot name type any) (resolve-slot (car slots))))
 		(loop (cdr slots) 
 		      (cons #`(#,@slot :element-name '#,(if name name (car slot))
 				       :element-type (lambda () #,(car type))
@@ -235,7 +235,8 @@
     (define (resolve-type s)
       (values ((slot-definition-option s :element-type))
 	      (slot-definition-option s :min)
-	      (slot-definition-option s :max)))
+	      (slot-definition-option s :max)
+	      (slot-definition-option s :any-element #f)))
     (let ((class (class-of element)))
       (unless (is-a? class <xml-element>)
 	(error 'unmarshal "given element is not unmarshallable" element))
@@ -272,48 +273,62 @@
 	  ,@(fold-right 
 	     (lambda (s knil)
 	       (define (check-element-count elems min max)
-		 (let ((n (length elems)))
-		   ;; if length returns negative number then this is not a list
-		   (when (negative? n)
-		     (error 'unmarshal-element
-			    "the valus must be a list for maxOccur > 1" elems))
-		   (when (< n min)
-		     (error 'unmarshal-element 
-			    "the element is less than minOccur" 
-			    `(min ,min) elems))
-		   (when (and (not (eq? max 'unbounded)) (> n max))
-		     (error 'unmarshal-element 
-			    "the element is more than maxOccur" 
-			    `(man ,man) elems))
-		   #t))
+		 (cond ((pair? elems)
+			(let ((n (length elems)))
+			  ;; if length returns negative number then this
+			  ;; is not a list
+			  (when (negative? n)
+			    (error 'unmarshal-element
+				   "the valus must be a list for maxOccur > 1"
+				   elems))
+			  (when (< n min)
+			    (error 'unmarshal-element 
+				   "the element is less than minOccur" 
+				   `(min ,min) elems))
+			  (when (and (not (eq? max 'unbounded)) (> n max))
+			    (error 'unmarshal-element 
+				   "the element is more than maxOccur" 
+				   `(max ,max) elems))
+			  #t))
+		       ((or (eq? max 'unbounded) (> max 1))
+			(error 'unmarshal-element
+			       "the value must be a list for maxOccur > 1"
+			       elems))
+		       ((and (>= 1 min) (and (number? max) (= max 1))))
+		       (else
+			(error 'unmarshal-element
+			       "the value is too less"
+			       `(min ,min) `(max ,max) elems))))
 	       (let*-values (((slot-name name) (resolve-name s))
-			     ((type min max) (resolve-type s)))
+			     ((type min max any) (resolve-type s)))
 		 (if (slot-bound? element slot-name)
 		     (let ((value (~ element slot-name)))
-		       ;; if max > 1 or unbounded then value must be a list
-		       (if (or (eq? max 'unbounded) (> max 1))
-			   (and (check-element-count value min max)
-				`(,@(map (lambda (v) 
-					   (unmarshal-element 
-					    (convert-name name class) v))
-					 value) ,@knil))
-			   (cond ((keyword? type)
-				  ;; primitive so resolve it now
-				  (let-values (((attr v)
-						(primitive->xml-value type value)))
-				    (cons
-				     `(,(convert-name name class) 
-				       (@ ,@attr)
-				       ,@(if (pair? v) v (list v)))
-				     knil)))
-				 ((is-a? (class-of value) <xml-element>)
-				  (cons (unmarshal-element
-					 (convert-name name class)
-					 value)
-					knil))
-				 (else
-				  (error 'unmarshal-element
-					 "unknown element" value)))))
+		       (check-element-count value min max)
+		       (cond (any
+			      ;; is this correct?
+			      (if (pair? value)
+				  `(,@(map cadr (map unmarshal-sxml value))
+				    ,@knil)
+				  (cons (cadr (unmarshal-sxml value)) knil)))
+			     ;; if max > 1 or unbounded then value must be a list
+			     ((or (eq? max 'unbounded) (> max 1))
+			      `(,@(map (cut unmarshal-element
+					    (convert-name name class) <>)
+				       value) ,@knil))
+			     ((keyword? type)
+			      (let-values (((attr v)
+					    (primitive->xml-value type value)))
+				(cons `(,(convert-name name class) 
+					(@ ,@attr) 
+					,@(if (pair? v) v (list v)))
+				      knil)))
+			     ((is-a? (class-of value) <xml-element>)
+			      (cons (unmarshal-element (convert-name name class)
+						       value)
+				    knil))
+			     (else
+			      (error 'unmarshal-element
+				     "unknown element" value))))
 		     (or (and (zero? min) '())
 			 (error 'unmarshal-element
 				"element must be presented!" name)))))

@@ -244,12 +244,13 @@
       `(define ,(string->symbol (->scheme-class-name (~ type 'name)))
 	 ,simple-type))))
 
-(define (%generate-content name e type min max)
+(define (%generate-content name e type min max :key (any #f))
   (let1 elm-name (string->symbol (or (schema-name e) "any"))
     `(,(string->symbol name)
       :init-keyword ,(->keyword name)
       ,@(if (eq? (string->symbol name) elm-name) '() `(:element-name ,elm-name))
-      :element-type ,(list (->scheme-type type) min max))))
+      :element-type ,(list (->scheme-type type) min max)
+      ,@(if any `(:any-element ,any) '()))))
 
 (define (split-name name) (car (last-pair (string-split name #/\./))))
 ;; for only debug
@@ -281,7 +282,8 @@
   (%generate-content "any" (~ e 'element)
 		     (string-append +xsd-2001-ns-uri+ ":anyType")
 		     (schema-min-occurs (~ e 'element))
-		     (schema-max-occurs (~ e 'element))))
+		     (schema-max-occurs (~ e 'element))
+		     :any (~ e 'element 'process-contents)))
 
 (define-method generate-content ((e <type&element>))
   (generate-content (~ e 'type)))

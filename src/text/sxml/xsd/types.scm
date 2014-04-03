@@ -307,7 +307,7 @@
 		       (check-element-count value min max)
 		       (cond (any
 			      ;; is this correct?
-			      (if (pair? value)
+			      (if (or (pair? value) (null? value))
 				  `(,@(map cadr (map unmarshal-sxml value))
 				    ,@knil)
 				  (cons (cadr (unmarshal-sxml value)) knil)))
@@ -524,7 +524,7 @@
 		  (e ((sxml:filter (lambda (e)
 				     (eq? (sxml:name e) full-name)))
 		      content)))
-	     (let ((v (cond (any
+	     (let ((v (cond ((and any (not (null? e)))
 			     (map (lambda (c)
 				    (let-values (((this rest)
 						  (find-class c contexts)))
@@ -532,6 +532,10 @@
 					     (cons '*TOP* c)
 					     rest)))
 				  content))
+			    (any '()
+			     ;; TODO filter content with already
+			     ;; marshalled element
+			     )
 			    ((keyword? type)
 			     (map (lambda (e)
 				    (let* ((attr (sxml:attr e +instance:type+))

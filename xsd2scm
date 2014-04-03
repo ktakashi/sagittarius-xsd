@@ -234,15 +234,23 @@
 ;; FIXME, simple type must consider the namespace as well
 (define-method generate-type-definition ((type <simple-type>))
   (let1 e (filter-map (lambda (child) 
-			(and (is-a? child <xsd-restriction>)
+			(and (or (is-a? child <xsd-restriction>)
+				 (is-a? child <xsd-list>))
 			     child))
 		      (~ type 'element 'children))
     (when  (or (null? e) (not (null? (cdr e))))
       (error 'generate-type-definition 
-	     "simpleType only supports restrictions for now" e))
-    (let1 simple-type (->scheme-type (~ (car e) 'base))
-      `(define ,(string->symbol (->scheme-class-name (~ type 'name)))
-	 ,simple-type))))
+	     "simpleType only supports restriction/list for now" e))
+    (cond ((is-a? (car e) <xsd-restriction>)
+	   (let1 simple-type (->scheme-type (~ (car e) 'base))
+	     `(define ,(string->symbol (->scheme-class-name (~ type 'name)))
+		,simple-type)))
+	  ((is-a? (car e) <xsd-list>)
+	   ;; TODO
+	   (let1 item-type (->scheme-type (~ (car e) 'item-type))
+	     `(define ,(string->symbol (->scheme-class-name (~ type 'name)))
+		,item-type))
+	   ))))
 
 (define (%generate-content name e type min max :key (any #f))
   (let1 elm-name (string->symbol (or (schema-name e) "any"))
@@ -271,6 +279,8 @@
 
 (define-method generate-content ((e <simple-type>))
   ;; for now only restriction
+  ;; TODO type generation accepts <xsd-list>
+  ;; marshaller and unmarshaller don't know how to do it yet.
   (let1 children (schema-children (~ e 'element))
     (unless (and (not (null? children)) (is-a? (car children) <xsd-restriction>))
       (error 'generate-content "simpleType only supprots restriction for now" e))

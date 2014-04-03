@@ -712,7 +712,7 @@
     ;; the attribute which value needs to be qualified.
     ;; say 'name', 'id' and so on should not be but 'type'
     ;; TODO, not sure which one should be other than 'type' and 'base'.
-    (define qualified '(type base ref))
+    (define qualified '(type base ref itemType))
     (letrec
 	((namespaces
 	  (map (lambda (el)

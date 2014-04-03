@@ -61,6 +61,7 @@
 	    (text sxml tools)
 	    (text sxml sxpath)
 	    (text sxml ssax)
+	    ;; for debug...
 	    (pp))
 
   ;; marker class :)
@@ -273,7 +274,7 @@
 	  ,@(fold-right 
 	     (lambda (s knil)
 	       (define (check-element-count elems min max)
-		 (cond ((pair? elems)
+		 (cond ((or (pair? elems) (null? elems))
 			(let ((n (length elems)))
 			  ;; if length returns negative number then this
 			  ;; is not a list
@@ -419,7 +420,8 @@
 		 (string=? (symbol->string ncname) (sxml:ncname element)))
 	    (error 'marshal-sxml 
 		   "element does not belong to the proper namespace" 
-		   ns ncname namespace
+		   (if ns (format "~a:~a" ns ncname) ncname) 
+		   namespace
 		   element
 		   sxml))))
 
@@ -458,6 +460,7 @@
 	 (lambda (s)
 	   (define (get-max s) (slot-definition-option s :max))
 	   (define (get-min s) (slot-definition-option s :min))
+	   (define (get-any s) (slot-definition-option s :any-element #f))
 	   (define (get-real-type class e)
 	     (or (and-let* ((xml-type (sxml:attr e +instance:type+))
 			    (subclasses (class-direct-subclasses class)))
@@ -477,7 +480,8 @@
 		     ;; find from context
 		     (and (not (null? contexts))
 			  (find (lambda (class)
-				  (eq? (~ class 'element) (string->symbol name)))
+				  (eq? (~ class 'element)
+				       (string->symbol name)))
 				contexts)))
 		 type))
 	   (define (check-element-count elems min max full-name)
@@ -488,6 +492,25 @@
 	       (when (and (not (eq? max 'unbounded)) (> n max))
 		 (error 'marshal-sxml "too many elements"
 			`((min ,min) (max ,max)) elems full-name))))
+	   (define (find-class elem contexts)
+	     (let loop ((classes contexts))
+	       (if (null? classes)
+		   (error 'marshal-sxml "don't know how to marshal" elem
+			  contexts)
+		   (let1 class (car classes)
+		     (if (is-a? class <xml-element>)
+			 (let* ((name (~ class 'element))
+				(ns   (~ class 'namespace))
+				(full-name (if ns
+					       (string->symbol
+						(format "~a:~a" ns name))
+						name)))
+			   (if (eq? full-name (car elem))
+			       (values class (lset-difference eq? (list class)
+							      contexts))
+			       (loop (cdr class))))
+			 ;; well ...
+			 (loop (cdr classes)))))))
 	   (let* ((ncname (get-name s))
 		  (slot-name (slot-definition-name s))
 		  (full-name (if namespace
@@ -497,31 +520,42 @@
 		  (type (get-type s))
 		  (max (get-max s))
 		  (min (get-min s))
+		  (any (get-any s))
 		  (e ((sxml:filter (lambda (e)
 				     (eq? (sxml:name e) full-name)))
 		      content)))
-	     (let ((v (if (keyword? type)
-			  (map (lambda (e)
-				 (let* ((attr (sxml:attr e +instance:type+))
-					(type (extract-type attr type)))
-				   (unless type
-				     (error 'marshal-sxml "unknown type"
-					    attr))
-				   (if (keyword? type)
-				       (xml-value->primitive type (sxml:content e))
-				       (let ((o (make type)))
-					 (marshal-rec o type e)))))
-			       e)
-			  ;; must be a class
-			  (map (lambda (e)
-				 (unless (is-a? type <xml-element>)
-				   (error 'marshal
-					  "given class is not marshallable"
-					  type))
-				 (let* ((type (get-real-type type e))
-					(o (make type)))
-				   (marshal-rec o type e)))
-			       e))))
+	     (let ((v (cond (any
+			     (map (lambda (c)
+				    (let-values (((this rest)
+						  (find-class c contexts)))
+				      (apply marshal-sxml this 
+					     (cons '*TOP* c)
+					     rest)))
+				  content))
+			    ((keyword? type)
+			     (map (lambda (e)
+				    (let* ((attr (sxml:attr e +instance:type+))
+					   (type (extract-type attr type)))
+				      (unless type
+					(error 'marshal-sxml "unknown type"
+					       attr))
+				      (if (keyword? type)
+					  (xml-value->primitive 
+					   type (sxml:content e))
+					  (let ((o (make type)))
+					    (marshal-rec o type e)))))
+				  e))
+			    (else
+			      ;; must be a class
+			      (map (lambda (e)
+				     (unless (is-a? type <xml-element>)
+				       (error 'marshal
+					      "given class is not marshallable"
+					      type))
+				     (let* ((type (get-real-type type e))
+					    (o (make type)))
+				       (marshal-rec o type e)))
+				   e)))))
 	       ;; check min max
 	       (check-element-count v min max full-name)
 	       (cond ((or (eq? max 'unbounded) (> max 1))

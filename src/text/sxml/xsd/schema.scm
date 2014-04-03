@@ -72,6 +72,7 @@
 	    <xsd-field>
 	    ;; list
 	    <xsd-list>
+	    <xsd-union>
 
 	    schema-source
 	    ;; accessors
@@ -109,6 +110,8 @@
 	    (srfi :26 cut)
 	    (text sxml ssax)
 	    (text sxml tools)
+	    (rfc uri)
+	    (rfc http)
 	    (pp))
 
   ;; I don't think we need 1999 and 2000/10 but *just* in case.
@@ -326,6 +329,9 @@
   (define-class <xsd-list> (<xsd-type>)
     ((item-type :accessor schema-item-type :init-keyword :item-type 
 		:init-value #f)))
+  (define-class <xsd-union> (<xsd-type>)
+    ((member-types :accessor schema-member-type :init-keyword :member-types
+		   :init-value #f)))
 
   ;;;;; APIs
 
@@ -352,20 +358,22 @@
       (cut parse-xsd <> :locator locator :source file)))
 
   (define (parse-xsd-url url :key (locator url-locator))
-    (let*-values (((scheme specific) (uri-scheme&specific url))
+    (parse-xsd (open-string-input-port (url-locator url))
+	       :locator locator :source url))
+
+  (define (file-locator schema-location) 
+    (call-with-input-file schema-location (cut get-string-all <>)))
+
+  (define (url-locator schema-location) 
+    (let*-values (((scheme specific) (uri-scheme&specific schema-location))
 		  ((auth path query frag) (uri-decompose-hierarchical specific))
 		  ((status header body)
 		   (http-get auth (uri-compose :path path
 					       :query query
 					       :fragment frag))))
-      (if (string=? code "200")
-	  (parse-xsd (open-string-input-port body) :locator locator
-		     :source url)
-	  ;; TODO raise particular condition
-	  (error 'parse-xsd-url "could not retrieve URL" url))))
-
-  (define (file-locator schema-location) 
-    (call-with-input-file schema-location (cut get-string-all <>)))
+      (if (string=? status "200")
+	  body
+	  (error 'parse-xsd-url "could not retrieve URL" schema-location))))
 
   ;;;;;;
   ;;; Middle level APIs
@@ -573,6 +581,11 @@
      (make <xsd-list> :item-type (sxml:attr elms 'itemType))
      elms namespace opts))
 
+  (define-method handle-schema ((name (eql :union)) elms namespace opts)
+    (handle-schema-elements 
+     (make <xsd-unique> :member-types (sxml:attr elms 'memberTypes))
+     elms namespace opts))
+
   ;; ignorable elements
   ;; annnoation
   (define-method handle-schema ((name (eql :annotation)) elms namespace opts)
@@ -712,7 +725,7 @@
     ;; the attribute which value needs to be qualified.
     ;; say 'name', 'id' and so on should not be but 'type'
     ;; TODO, not sure which one should be other than 'type' and 'base'.
-    (define qualified '(type base ref itemType))
+    (define qualified '(type base ref itemType memberTypes))
     (letrec
 	((namespaces
 	  (map (lambda (el)

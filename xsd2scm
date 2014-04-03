@@ -39,13 +39,16 @@
 
 (define (fixup-locator includes)
   (lambda (schema-location)
-    (let ((file (exists (lambda (include)
-			  (let ((p (build-path include schema-location)))
-			    (and (file-exists? p) p))) includes)))
-      (if file
-	  (file-locator file)
-	  (error 'xsd2scm "import/included XSD does not exist on tha path"
-		 schema-location includes)))))
+    ;; just for convenience
+    (if (string-prefix? "http" schema-location)
+	(url-locator schema-location)
+	(let ((file (exists (lambda (include)
+			      (let ((p (build-path include schema-location)))
+				(and (file-exists? p) p))) includes)))
+	  (if file
+	      (file-locator file)
+	      (error 'xsd2scm "import/included XSD does not exist on tha path"
+		     schema-location includes))))))
 
 ;; naive
 (define (->scheme-name name)

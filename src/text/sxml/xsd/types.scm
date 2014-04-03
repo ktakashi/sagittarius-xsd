@@ -425,9 +425,8 @@
 		   element
 		   sxml))))
 
-    (define (marshal-rec o class root-element)
-      (let ((content (sxml:content root-element))
-	    (namespace (~ class 'namespace)))
+    (define (marshal-rec o class content root-element)
+      (let ((namespace (~ class 'namespace)))
 	(define (get-name s)
 	  (slot-definition-option s :element-name))
 	(define (get-type s)
@@ -450,7 +449,7 @@
 			    (xml-attribute->primitive type attr)
 			    ;; must be a class
 			    (let ((o (make type))) 
-			      (marshal-rec o type attr)))))
+			      (marshal-rec o type (sxml:content attr) attr)))))
 		 (set! (~ o slot-name) v)))))
 	 (filter-map (lambda (s)
 		       (and (slot-definition-option s :attribute #f)
@@ -501,10 +500,7 @@
 		     (if (is-a? class <xml-element>)
 			 (let* ((name (~ class 'element))
 				(ns   (~ class 'namespace))
-				(full-name (if ns
-					       (string->symbol
-						(format "~a:~a" ns name))
-						name)))
+				(full-name (->full-name ns name)))
 			   (if (eq? full-name (car elem))
 			       (values class (lset-difference eq? (list class)
 							      contexts))
@@ -513,10 +509,7 @@
 			 (loop (cdr classes)))))))
 	   (let* ((ncname (get-name s))
 		  (slot-name (slot-definition-name s))
-		  (full-name (if namespace
-				 (string->symbol 
-				  (format "~a:~a" namespace ncname))
-				 ncname))
+		  (full-name (->full-name namespace ncname))
 		  (type (get-type s))
 		  (max (get-max s))
 		  (min (get-min s))
@@ -524,18 +517,18 @@
 		  (e ((sxml:filter (lambda (e)
 				     (eq? (sxml:name e) full-name)))
 		      content)))
-	     (let ((v (cond ((and any (not (null? e)))
+	     ;; filter the content so that it won't be processed
+	     ;; more than once
+	     ;; this is funny, lset-difference actually cares the order... 
+	     (set! content (lset-difference eq? content e))
+	     (let ((v (cond (any
 			     (map (lambda (c)
 				    (let-values (((this rest)
 						  (find-class c contexts)))
 				      (apply marshal-sxml this 
 					     (cons '*TOP* c)
 					     rest)))
-				  content))
-			    (any '()
-			     ;; TODO filter content with already
-			     ;; marshalled element
-			     )
+				   content))
 			    ((keyword? type)
 			     (map (lambda (e)
 				    (let* ((attr (sxml:attr e +instance:type+))
@@ -547,7 +540,8 @@
 					  (xml-value->primitive 
 					   type (sxml:content e))
 					  (let ((o (make type)))
-					    (marshal-rec o type e)))))
+					    (marshal-rec o type 
+							 (sxml:content e) e)))))
 				  e))
 			    (else
 			      ;; must be a class
@@ -558,7 +552,8 @@
 					      type))
 				     (let* ((type (get-real-type type e))
 					    (o (make type)))
-				       (marshal-rec o type e)))
+				       (marshal-rec o type
+						    (sxml:content e) e)))
 				   e)))))
 	       ;; check min max
 	       (check-element-count v min max full-name)
@@ -580,7 +575,7 @@
 	    (element (~ class 'element))
 	    (namespace (~ class 'namespace)))
 	(check-namespace root-element element namespace)	
-	(marshal-rec o class root-element))))
+	(marshal-rec o class (sxml:content root-element) root-element))))
 
   (define (marshal-xml class xml . contexts)
     (apply marshal-sxml class (%ssax:xml->sxml (open-string-input-port xml) '())
@@ -704,4 +699,9 @@
 				       namespace-prefix-assig)))
 		   result)))
 	)))
+
+  (define (->full-name ns name)
+    (if ns
+	(string->symbol (format "~a:~a" ns name))
+	name))
 )

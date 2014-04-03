@@ -508,7 +508,7 @@
 			   (if (eq? full-name (car elem))
 			       (values class (lset-difference eq? (list class)
 							      contexts))
-			       (loop (cdr class))))
+			       (loop (cdr classes))))
 			 ;; well ...
 			 (loop (cdr classes)))))))
 	   (let* ((ncname (get-name s))

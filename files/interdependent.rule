@@ -1,0 +1,2 @@
+;; -*- scheme -*-
+((:file "interdependent2.xsd" :name (interdependent2)))

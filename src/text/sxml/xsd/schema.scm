@@ -108,6 +108,7 @@
 	    (srfi :1 lists)
 	    (srfi :13 strings)
 	    (srfi :26 cut)
+	    (srfi :39 parameters)
 	    (text sxml ssax)
 	    (text sxml tools)
 	    (rfc uri)
@@ -122,6 +123,22 @@
   (define-constant +ns-list+ `(,+xsd-2001-ns-uri+
 			       ,+xsd-2000-ns-uri+
 			       ,+xsd-1999-ns-uri+))
+
+  ;; parse context
+  ;; XSD allows to have cross-referenced import or include and this
+  ;; causes infinite loop to resolve. To avoid this we need to manage
+  ;; which file is already loaded and if we find the same file then
+  ;; we need to skip it.
+  (define-class <parse-context> ()
+    (;; alist of file and parsed schema for import
+     (schemas :init-value '())
+     ;; alist of file and parsed schemas for include.
+     (included :init-value '())))
+  (define (make-parse-context) (make <parse-context>))
+  ;; for my laziness
+  ;; this holds the current parse context so that handle-schema
+  ;; can refer it.
+  (define *current-context* (make-parameter #f))
 
   ;; conditions
   (define-condition-type &xsd-error &error make-xsd-error xsd-error?
@@ -379,7 +396,8 @@
   ;;; Middle level APIs
   ;;; this assmume all xsd namespace converted xsd: prefix
 
-  (define (sxml->schema-definitions sxml :key (source #f)
+  (define (sxml->schema-definitions sxml :key (source #f) 
+				    (context (make-parse-context))
 				    :allow-other-keys opts)
     (let ((content (sxml:content sxml)))
       ;; sanity check
@@ -404,7 +422,8 @@
 		    (rlet1 r (cons xsd imported)
 		      (resolve-schemas r))
 		    (let* ((e (car elms))
-			   (elm (invoke-handle-schema e target-namespace opts)))
+			   (elm (invoke-handle-schema e target-namespace
+						      context opts)))
 		      (cond ((pair? elm)
 			     (cond ((eq? (car elm) :imported)
 				    (loop (cdr elms) 
@@ -432,9 +451,10 @@
 	     'sxml->schema-definitions "unknown namespace" ns)))))
 
   ;; misc
-  (define (invoke-handle-schema e namespace opts)
+  (define (invoke-handle-schema e namespace context opts)
     (define (->keyword s) (make-keyword (string->symbol s)))
-    (handle-schema (->keyword (sxml:ncname e)) e namespace opts))
+    (parameterize ((*current-context* context))
+      (handle-schema (->keyword (sxml:ncname e)) e namespace opts)))
 
   (define-method handle-schema (name elem namespace opts)
     (error 'internal "not supported" name elem))
@@ -599,7 +619,8 @@
   (define-method handle-schema-elements 
     ((ch <children-mixin>) sxml namespace opts)
     (let ((children (filter-map 
-		     (cut invoke-handle-schema <> namespace opts)
+		     (cut invoke-handle-schema <> namespace 
+			  (*current-context*) opts)
 		     (sxml:content sxml))))
       (set! (~ ch 'children) children)
       (call-next-method)))
@@ -683,6 +704,16 @@
 	    (schema-nillable e (schema-nillable elt)))))))
 
   ;;;;  Internal
+  ;; handling import and include are bit tricky. we basically resolve
+  ;; library dependency however if the XSD contains cross-reference
+  ;; then we don't import the previous one. For example;
+  ;; files/interdependent1.xsd and files/interdependent2.xsd are
+  ;; cross-referenced XSDs. If xsd2scm generates a library for 
+  ;; files/interdependent1.xsd then the dependency library of 
+  ;; files/interdependent2.xsd won't import the first library to
+  ;; avoid infinite loop of library resolution.
+  ;; I believe this is reasonable decision but not 100% sure yet.
+
   ;; import
   (define (sxml->imported-xsd sxml namespace :key (locator #f))
     (let* ((attrs (sxml:attr-list-node sxml))
@@ -690,33 +721,54 @@
 				 namespace))
 	   (schema-location (sxml:attr-from-list attrs 'schemaLocation))
 	   (imported (and locator (locator schema-location))))
-      (if imported
-	  (let ((imported-xsds (parse-xsd (open-string-input-port imported)
-					  :locator locator
-					  :source schema-location)))
-	    (set! (~ (car imported-xsds) 'target-namespace) target-namespace)
-	    imported-xsds)
-	  #f)))
+      (cond ((assoc schema-location (~ (*current-context*) 'schemas)) => cdr)
+	    (imported
+	     (let ((mark (cons schema-location #f)))
+	       (push! (~ (*current-context*) 'schemas) mark)
+	       (let ((imported-xsds (parse-xsd (open-string-input-port imported)
+					       :locator locator
+					       :context (*current-context*)
+					       :source schema-location)))
+		 (set! (~ (car imported-xsds) 'target-namespace)
+		       target-namespace)
+		 ;; for now we assume it's only one xsd
+		 ;; TODO can we?
+		 (set-cdr! mark (car imported-xsds))
+		 imported-xsds)))
+	    (else #f))))
 
   ;; include
   (define (sxml->include-xsd sxml namespace :key (locator #f))
     (let* ((attrs (sxml:attr-list-node sxml))
 	   (schema-location (sxml:attr-from-list attrs 'schemaLocation))
 	   (include (and locator (locator schema-location))))
-      (if include
-	  (let ((included-schemas (parse-xsd (open-string-input-port include)
+      (cond ((assoc schema-location (~ (*current-context*) 'included))
+	     => (lambda (slot)
+		  (unless (cdr slot)
+		    ;; simply we don't know how to handle this...
+		    (raise-xsd-error 
+		     (make-xsd-error sxml)
+		     'xs:include
+		     "Cross referenced include is not supported"))
+		  (cdr slot)))
+	    (include
+	     (let ((mark (cons schema-location #f)))
+	       (push! (~ (*current-context*) 'included) mark)
+	       (let ((schemas (parse-xsd (open-string-input-port include)
 					 :locator locator
 					 :source schema-location)))
-	    ;; only interested in the first XSD (the rest must be as it is)
-	    ;; for my convenience though...
-	    (append! (map (lambda (e)
-			   (when (or (is-a? e <xml-schema-element>)
-				     (is-a? e <xsd-type>))
-			     (schema-namespace e namespace))
-			   e)
-			 (schema-elements (car included-schemas)))
-		     (cdr included-schemas)))
-	  #f)))
+		 ;; only interested in the first XSD (the rest must be as it is)
+		 ;; for my convenience though...
+		 (rlet1 r (append! (map 
+				    (lambda (e)
+				      (when (or (is-a? e <xml-schema-element>)
+						(is-a? e <xsd-type>))
+					(schema-namespace e namespace))
+				      e)
+				    (schema-elements (car schemas)))
+				   (cdr schemas))
+		   (set-cdr! mark r)))))
+	    (else #f))))
 
   ;; internal parser
   (define (ssax:xsd->sxml port)

@@ -512,10 +512,14 @@
 			       (loop (cdr classes))))
 			 ;; well ...
 			 (loop (cdr classes)))))))
+	   (define (get-namespace type)
+	     (if (keyword? type)
+		 namespace ;; correct?
+		 (~ type 'namespace)))
 	   (let* ((ncname (get-name s))
-		  (slot-name (slot-definition-name s))
-		  (full-name (->full-name namespace ncname))
 		  (type (get-type s))
+		  (slot-name (slot-definition-name s))
+		  (full-name (->full-name (get-namespace type) ncname))
 		  (max (get-max s))
 		  (min (get-min s))
 		  (any (get-any s))

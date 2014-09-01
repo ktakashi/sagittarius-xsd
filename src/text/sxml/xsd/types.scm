@@ -334,7 +334,7 @@
 				    knil))
 			     (else
 			      (error 'unmarshal-element
-				     "unknown element" value))))
+				     "unknown element" slot-name value))))
 		     (or (and (zero? min) knil)
 			 (error 'unmarshal-element
 				"element must be presented!" name)))))

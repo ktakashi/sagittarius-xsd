@@ -756,6 +756,7 @@
 	       (push! (~ (*current-context*) 'included) mark)
 	       (let ((schemas (parse-xsd (open-string-input-port include)
 					 :locator locator
+					 :context (*current-context*)
 					 :source schema-location)))
 		 ;; only interested in the first XSD (the rest must be as it is)
 		 ;; for my convenience though...

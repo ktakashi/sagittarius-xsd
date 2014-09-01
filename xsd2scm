@@ -79,6 +79,10 @@
 
 
 (define *parents* (make-parameter '()))
+;; I have no idea why WSDL eliminates namespace (maybe it's written
+;; in the spec which I haven't checked yet). But in some cases, we
+;; need to ignore namespace. We do it only in rule file for now.
+(define *ignore-ns* (make-parameter #f))
 
 ;; for xs:extension
 ;; key:   full-name
@@ -315,7 +319,7 @@
       `(define-xml-type ,(string->symbol (->scheme-class-name (~ type 'name)))
 	 ,(if super (get-super super) ())
 	 ,(map generate-content contents)
-	 :namespace ,(~ type 'element 'namespace))))
+	 :namespace ,(and (not (*ignore-ns*)) (~ type 'element 'namespace)))))
   (let1 contents (filter-map generate-type-definition (~ type 'contents))
     (if (null? contents)
 	(generate-class type)
@@ -333,7 +337,8 @@
        (,(->scheme-type (~ type 'name))) ()
        :element-type ,(->scheme-type (~ type 'name))
        :element-name ,(string->symbol (schema-name e))
-       :namespace ,(schema-namespace e)))
+       :namespace ,(and (not (*ignore-ns*)) 
+			(schema-namespace e))))
   )
 ;; this is stray element which means the definition itself
 ;; doesn't have any children but only type specified in toplevel
@@ -343,7 +348,8 @@
      (,(->scheme-type (schema-type e))) ()
      :element-type ,(->scheme-type (schema-type e))
      :element-name ,(string->symbol (schema-name e))
-     :namespace ,(schema-namespace e))
+     :namespace ,(and (not (*ignore-ns*)) 
+		      (schema-namespace e)))
   )
 
 ;; TODO, seems not needed though...
@@ -412,6 +418,8 @@
 			 (generate-library-name rule))
 	    (cons* name
 		   (or (and out (cadr out)) (->file name))
+		   (cond ((memq :no-namespace rule) => cadr)
+			 (else #f))
 		   xsd))))
       (let1 namespace (schema-target-namespace xsd)
 	(cond ((assoc namespace rules) => construct-rule)
@@ -443,9 +451,11 @@
 	    (let1 dep (car deps)
 	      (let ((name (car dep))
 		    (out  (cadr dep))
-		    (xsd  (cddr dep)))
+		    (no-ns  (caddr dep))
+		    (xsd  (cdddr dep)))
 		;; not right solution...
-		(generate xsd (format "~a" name) out (map car (cdr deps)))))
+		(parameterize ((*ignore-ns* no-ns))
+		  (generate xsd (format "~a" name) out (map car (cdr deps))))))
 	    (loop (cdr deps)))
 	  ))
       )))

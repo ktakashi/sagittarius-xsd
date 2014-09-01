@@ -25,11 +25,15 @@ The rule file is a list of rule. A rule must be one of following forms;
 - (:file _XSD file_ :name _library name_)
 - (:file _XSD file_ :name _library name_ :output _output file_)
 - (_namespace_)
-- (_namespace_ file_ :name _library name_)
-- (_namespace_ file_ :name _library name_ :output _output file_)
+- (_namespace_ :name _library name_)
+- (_namespace_ :name _library name_ :output _output file_)
+- (_any of above_ :no-namespace _indicator_)
 
 _XSD file_ must be the parsed XSD file name. _namespace_ must be parsed
-XSD file's targetNamespace attribute value.
+XSD file's targetNamespace attribute value. :no-namespace to make code
+without namespace. In some case, WSDL 1.1 for example, requires to elimiate
+the target namespace for some reason. To do that _indicator_ must be a
+true value. By default, it's #f.
 
 If the dependency is not specified or matched, then it will be ignored.
 Thus writing proper dependency rule is important to use without modification

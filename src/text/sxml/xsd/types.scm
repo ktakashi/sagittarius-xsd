@@ -302,6 +302,11 @@
 			       `(min ,min) `(max ,max) elems))))
 	       (let*-values (((slot-name name) (resolve-name s))
 			     ((type min max any) (resolve-type s)))
+		 (define (unmarshal-primitive type value)
+		   (let-values (((attr v) (primitive->xml-value type value)))
+		     `(,(convert-name name class) 
+		       (@ ,@attr) 
+		       ,@(if (pair? v) v (list v)))))
 		 (if (slot-bound? element slot-name)
 		     (let ((value (~ element slot-name)))
 		       (check-element-count value min max)
@@ -313,19 +318,19 @@
 				  (cons (cadr (unmarshal-sxml value)) knil)))
 			     ;; if max > 1 or unbounded then value must be a list
 			     ((or (eq? max 'unbounded) (> max 1))
-			      `(,@(map (cut unmarshal-element
-					    (convert-name name class) <>)
-				       value) ,@knil))
+			      ;; primitive list needs to be handled
+			      (if (keyword? type)
+				  `(,@(map (cut unmarshal-primitive type <>)
+					   value) ,@knil)
+				  `(,@(map (cut unmarshal-element 
+						(convert-name name class) <>)
+					   value) ,@knil)))
 			     ((keyword? type)
-			      (let-values (((attr v)
-					    (primitive->xml-value type value)))
-				(cons `(,(convert-name name class) 
-					(@ ,@attr) 
-					,@(if (pair? v) v (list v)))
-				      knil)))
+			      (cons (unmarshal-primitive type value) knil))
 			     ((is-a? (class-of value) <xml-element>)
-			      (cons (unmarshal-element (convert-name name class)
-						       value)
+			      (cons (unmarshal-element 
+				     (convert-name name (class-of value))
+				     value)
 				    knil))
 			     (else
 			      (error 'unmarshal-element

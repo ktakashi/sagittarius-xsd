@@ -720,7 +720,8 @@
 	   (target-namespace (or (sxml:attr-from-list attrs 'namespace)
 				 namespace))
 	   (schema-location (sxml:attr-from-list attrs 'schemaLocation))
-	   (imported (and locator (locator schema-location))))
+	   ;; Some of bad mannered XSD can have no schemaLocation attribute
+	   (imported (and schema-location locator (locator schema-location))))
       (cond ((assoc schema-location (~ (*current-context*) 'schemas)) => cdr)
 	    (imported
 	     (let ((mark (cons schema-location #f)))
@@ -741,7 +742,7 @@
   (define (sxml->include-xsd sxml namespace :key (locator #f))
     (let* ((attrs (sxml:attr-list-node sxml))
 	   (schema-location (sxml:attr-from-list attrs 'schemaLocation))
-	   (include (and locator (locator schema-location))))
+	   (include (and schema-location locator (locator schema-location))))
       (cond ((assoc schema-location (~ (*current-context*) 'included))
 	     => (lambda (slot)
 		  (unless (cdr slot)

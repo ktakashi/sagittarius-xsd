@@ -1,5 +1,7 @@
-#!/bin/env sash
-;; -*- mode:scheme; coding:utf-8; -*-
+#!/bin/sh
+#| -*- mode:scheme; coding:utf-8; -*-
+exec sagittarius $0 "$@"
+|#
 #!read-macro=sagittarius/regex
 (import (rnrs)
 	(clos core)
@@ -437,12 +439,17 @@
        (includes     (#\I "include") * '())
        (output       (#\o "output") #t #f)
        (dependency   (#\d "dependency") #t #f)
+       (stdin        (#\i "stdin") #f #f)
        . rest)
-    (when (null? rest) (usage))
-    (unless (file-exists? (car rest))
+    (when (and (not stdin) (null? rest)) (usage))
+    (unless (or stdin (file-exists? (car rest)))
       (format (current-error-port) "given file does not exist ~a" (car rest))
       (exit -1))
-    (let* ((xsds (parse-xsd-file (car rest) :locator (fixup-locator includes)))
+    (let* ((xsds (if stdin
+		     (parse-xsd (current-input-port) 
+				:locator (fixup-locator includes))
+		     (parse-xsd-file (car rest)
+				     :locator (fixup-locator includes))))
 	   (deps (generate-dependencies xsds dependency)))
       (generate (car xsds) library-name output (map car deps))
       (unless (null? deps)

@@ -331,7 +331,7 @@
 			      (cons (unmarshal-primitive type value) knil))
 			     ((is-a? (class-of value) <xml-element>)
 			      (cons (unmarshal-element 
-				     (convert-name name (class-of value))
+				     (convert-name name class)
 				     value)
 				    knil))
 			     (else

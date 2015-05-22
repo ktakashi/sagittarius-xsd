@@ -632,7 +632,8 @@
       (when attrs
 	(set! (~ p 'min-occurs) 
 	      (or (let1 m (sxml:attr-from-list attrs 'minOccurs)
-		    (and m (string->number m))) 1))
+		    (and m (string->number m)))
+		  1))
 	(set! (~ p 'max-occurs) 
 	      (or (and-let* ((m (sxml:attr-from-list attrs 'maxOccurs)))
 		    (if (string=? m "unbounded")

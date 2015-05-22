@@ -290,12 +290,15 @@ exec sagittarius $0 "$@"
   ;; for now only restriction
   ;; TODO type generation accepts <xsd-list>
   ;; marshaller and unmarshaller don't know how to do it yet.
-  (let1 children (schema-children (~ e 'element))
-    (unless (and (not (null? children)) (is-a? (car children) <xsd-restriction>))
-      (error 'generate-content "simpleType only supprots restriction for now" e))
+  (let ((children (schema-children (~ e 'element)))
+	(p        (or (~ e 'parent) e)))
+    (unless (and (not (null? children)) 
+		 (is-a? (car children) <xsd-restriction>))
+      (error 'generate-content 
+	     "simpleType only supprots restriction for now" e))
     (%generate-content (split-name (~ e 'name))
 		       (~ e 'parent) (schema-base (car children))
-		       (~ e 'min-occurs) (~ e 'max-occurs))))
+		       (~ p 'min-occurs) (~ p 'max-occurs))))
 
 (define-method generate-content ((e <any-type>))
   (%generate-content "any" (~ e 'element)

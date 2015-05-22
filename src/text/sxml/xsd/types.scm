@@ -173,6 +173,8 @@
   ;; TODO add more primitives...
   (define-method primitive->xml-value ((type (eql :string)) value)
     (values '() (->string value)))
+  (define-method primitive->xml-value ((type (eql :long)) value)
+    (values '() (->string value)))
 
   (define (int32? o) (and (integer? o) (<= #x-80000000 o #x7FFFFFFF)))
   (define-method primitive->xml-value ((type (eql :int)) value)

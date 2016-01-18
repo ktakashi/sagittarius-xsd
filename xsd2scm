@@ -323,8 +323,11 @@ exec sagittarius $0 "$@"
 	  (super (~ type 'super)))
       `(define-xml-type ,(string->symbol (->scheme-class-name (~ type 'name)))
 	 ,(if super (get-super super) ())
-	 ,(map generate-content contents)
+	 ,(if (and (null? (car contents)) (null? (cdr contents)))
+	      '() ;; empty sequence of something
+	      (map generate-content contents))
 	 :namespace ,(and (not (*ignore-ns*)) (~ type 'element 'namespace)))))
+
   (let1 contents (filter-map generate-type-definition (~ type 'contents))
     (if (null? contents)
 	(generate-class type)
@@ -382,6 +385,8 @@ exec sagittarius $0 "$@"
       (define (get-nested-name def)
 	(and (eq? (car def) 'begin)
 	     (map cadr (cdr def))))
+      (display ";; -*- mode: scheme -*-" out)
+      (newline out)
       (if library-name
 	  (pp `(library ,(read-from-string library-name)
 		   (export ,@(filter-map get-name type-defs)

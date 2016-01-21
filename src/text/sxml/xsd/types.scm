@@ -177,6 +177,11 @@
     (values '() (->string value)))
   (define-method primitive->xml-value ((type (eql :long)) value)
     (values '() (->string value)))
+  (define (int16? o) (and (integer? o) (<= #x-8000 o #x7FFF)))
+  (define-method primitive->xml-value ((type (eql :short)) value)
+    (unless (int16? value) 
+      (error 'primitive->xml-value "16 bit integer required" value))
+    (values '() (->string value)))
 
   (define (int32? o) (and (integer? o) (<= #x-80000000 o #x7FFFFFFF)))
   (define-method primitive->xml-value ((type (eql :int)) value)

@@ -62,6 +62,7 @@
 	    (text sxml sxpath)
 	    (text sxml ssax)
 	    (text sxml helper)
+	    (rfc base64)
 	    ;; for debug...
 	    (pp))
 
@@ -196,6 +197,13 @@
     (values '() date))
   (define-method primitive->xml-value ((type (eql :dateTime)) (date <date>))
     (values '() (date->string date "~6")))
+
+  (define-method primitive->xml-value ((type (eql :base64Binary))
+				       (bv <bytevector>))
+    (values '() (utf8->string (base64-encode bv))))
+  (define-method primitive->xml-value ((type (eql :base64Binary))
+				       (bv <string>))
+    (values '() (base64-encode-string bv)))
 
   (define-constant +instance:type+ 
     'http://www.w3.org/2001/XMLSchema-instance:type)

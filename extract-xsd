@@ -1,6 +1,6 @@
 #!/bin/sh
 #| -*- mode:scheme; coding:utf-8; -*-
-exec sagittarius -Lsrc $0 "$@"
+exec sagittarius $0 "$@"
 |#
 
 #!read-macro=sagittarius/regex

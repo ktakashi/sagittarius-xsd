@@ -98,6 +98,9 @@
 	    schema-fixed
 	    schema-refer
 	    schema-xpath
+	    
+	    ;; for WSDL
+	    ssax:xsd->sxml
 	    )
     (import (rnrs)
 	    (sagittarius)

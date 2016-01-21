@@ -61,6 +61,7 @@
 	    (text sxml tools)
 	    (text sxml sxpath)
 	    (text sxml ssax)
+	    (text sxml helper)
 	    ;; for debug...
 	    (pp))
 
@@ -222,7 +223,7 @@
 	      (sxml:content (cadr v)))))
 
   (define-method primitive->xml-attribute ((type <keyword>) v)
-    (let-values (((_ v) (primitive->xml-value key v))) v))
+    (let-values (((_ v) (primitive->xml-value type v))) v))
 
   (define (convert-name localname class)
     (let ((namespace (~ class 'namespace)))

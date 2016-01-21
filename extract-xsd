@@ -1,0 +1,39 @@
+#!/bin/sh
+#| -*- mode:scheme; coding:utf-8; -*-
+exec sagittarius -Lsrc $0 "$@"
+|#
+
+#!read-macro=sagittarius/regex
+(import (rnrs)
+	(sagittarius regex)
+	(text sxml ssax)
+	(text sxml tools)
+	(text sxml sxpath)
+	(text sxml serializer)
+	(text sxml xsd schema)
+	(rfc http)
+	(getopt)
+	(srfi :13)
+	(pp))
+
+(define (open-schema-aware-input-port path)
+  (regex-match-cond 
+   ((#/http(s?):\/\// path)
+    (_ secure?)
+    (let*-values (((srv uri) (url-server&path path))
+		  ((s h b) (http-get srv uri 
+				     :secure (not (string-null? secure?)))))
+       (open-string-input-port b)))
+   (else (open-file-input-port path (file-options no-fail) 
+			       (buffer-mode buffer)
+			       (native-transcoder)))))
+
+(define (main args)
+  (let* ((in (open-schema-aware-input-port (cadr args)))
+	 (sxml (ssax:xsd->sxml in)))
+    (print 
+     (srl:sxml->xml
+      (car ((sxpath "//xsd:schema"
+		    `((xsd . ,+xsd-2001-ns-uri+)
+		      (wdsl . "http://schemas.xmlsoap.org/wsdl/"))) sxml))))))
+  

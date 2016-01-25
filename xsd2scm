@@ -59,9 +59,9 @@ exec sagittarius $0 "$@"
     (regex-replace-all #/([A-Z]+)/ name
       (lambda (m) (string-append "-" (string-downcase (m 1)))))))
 
-(define (->scheme-class-name name :optional (with-type? #t))
+(define (->scheme-class-name name :optional (with-type? "-type"))
   (let ((name (->scheme-name name)))
-    (string-append "<" name (if with-type? "-type" "") ">")))
+    (string-append "<" name (if with-type? with-type? "") ">")))
 
 (define (->keyword s) (make-keyword (string->symbol s)))
 
@@ -310,7 +310,7 @@ exec sagittarius $0 "$@"
 (define-method generate-content ((e <type&element>))
   (generate-content (~ e 'type)))
 
-(define-method generate-type-definition ((type <complex-type>))
+(define (%generate-complex-type type inner?)
   ;; TODO handle missing class??
   (define (get-super type)
     (cond ((~ type-table type)
@@ -320,8 +320,10 @@ exec sagittarius $0 "$@"
 
   (define (generate-class type)
     (let ((contents (~ type 'contents))
-	  (super (~ type 'super)))
-      `(define-xml-type ,(string->symbol (->scheme-class-name (~ type 'name)))
+	  (super (~ type 'super))
+	  (name (->scheme-class-name (~ type 'name)
+				     (if inner? "-element-type" "-type"))))
+      `(define-xml-type ,(string->symbol name)
 	 ,(if super (get-super super) ())
 	 ,(if (and (null? (car contents)) (null? (cdr contents)))
 	      '() ;; empty sequence of something
@@ -334,9 +336,21 @@ exec sagittarius $0 "$@"
 	`(begin 
 	   ,@contents
 	   ,(generate-class type)))))
+(define-method generate-type-definition ((type <complex-type>))
+  (%generate-complex-type type #f))
 
+;; In this case, we put -element-type instead of -type.
+;; NB: this is because, name is case *sensitive* in XML
+;;     thus the same name difference case be valid. and
+;;     we converts all names to lower sneak case, then
+;;     will get the same name class definition.
+;; <xsd:element name="foo">
+;;   <xsd:complexType>
+;;     ...
+;;   </xsd:complexType>
+;; </xsd:element>
 (define-method generate-type-definition ((type <type&element>))
-  (generate-type-definition (~ type 'type)))
+  (%generate-complex-type (~ type 'type) #t))
 
 (define-method generate-element-definition ((e <type&element>))
   (let ((e (~ e 'element))

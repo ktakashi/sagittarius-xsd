@@ -65,13 +65,13 @@ exec sagittarius $0 "$@"
 
 (define (->keyword s) (make-keyword (string->symbol s)))
 
-(define (->scheme-type type)
+(define (->scheme-type type . opt)
   (let ((ncname (sxml:ncname (list (string->symbol type)))))
     (if (or (string-prefix? +xsd-2001-ns-uri+ type)
 	    (string-prefix? +xsd-2000-ns-uri+ type)
 	    (string-prefix? +xsd-1999-ns-uri+ type))
 	(->keyword ncname)
-	(string->symbol (->scheme-class-name ncname)))))
+	(string->symbol (apply ->scheme-class-name ncname opt)))))
 
 (define (class->slot-name class)
   (let ((name (symbol->string class)))
@@ -356,7 +356,7 @@ exec sagittarius $0 "$@"
   (let ((e (~ e 'element))
 	(type (~ e 'type)))
     `(define-xml-type ,(string->symbol (->scheme-class-name (schema-name e) #f))
-       (,(->scheme-type (~ type 'name))) ()
+       (,(->scheme-type (~ type 'name) "-element-type")) ()
        :element-type ,(->scheme-type (~ type 'name))
        :element-name ,(string->symbol (schema-name e))
        :namespace ,(and (not (*ignore-ns*)) 

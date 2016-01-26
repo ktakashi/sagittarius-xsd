@@ -37,6 +37,10 @@ exec sagittarius $0 "$@"
   (print "  -d<file>,--dependency=<file>")
   (print "   Specified imported XSD rules file. If this is omit then imported")
   (print "   XSD won't be generated.")
+  (print)
+  (print "  -i,--stdin")
+  (print "   Reads XSD from standard input instead of FILE.")
+  (print "   If this option is specified, then FILE needn't be given.")
   (exit 0))
 
 (define (fixup-locator includes)
@@ -59,7 +63,7 @@ exec sagittarius $0 "$@"
     (regex-replace-all #/([A-Z]+)/ name
       (lambda (m) (string-append "-" (string-downcase (m 1)))))))
 
-(define (->scheme-class-name name :optional (with-type? "-type"))
+(define (->scheme-class-name name :optional (with-type? +named-type-suffix+))
   (let ((name (->scheme-name name)))
     (string-append "<" name (if with-type? with-type? "") ">")))
 
@@ -85,6 +89,15 @@ exec sagittarius $0 "$@"
 ;; in the spec which I haven't checked yet). But in some cases, we
 ;; need to ignore namespace. We do it only in rule file for now.
 (define *ignore-ns* (make-parameter #f))
+
+(define-constant +named-type-suffix+ "-type")
+(define-constant +element-type-suffix+ "-element-type")
+;; kludge.
+;; Now we are using -element-type and -type suffix. to detect which 
+;; should be used, we uses parameter. 
+;; NB: <type&element> class should use -element-type
+;; FIXME should remove this!
+(define *type-suffix* (make-parameter +named-type-suffix+))
 
 ;; for xs:extension
 ;; key:   full-name
@@ -241,7 +254,7 @@ exec sagittarius $0 "$@"
 (define-method generate-type-definition (type) #f)
 
 ;; FIXME, simple type must consider the namespace as well
-(define-method generate-type-definition ((type <simple-type>))
+(define-method generate-type-definition ((type <simple-type>) inner?)
   (let1 e (filter-map (lambda (child) 
 			(and (or (is-a? child <xsd-restriction>)
 				 (is-a? child <xsd-list>))
@@ -251,7 +264,7 @@ exec sagittarius $0 "$@"
       (error 'generate-type-definition 
 	     "simpleType only supports restriction/list for now" e))
     (cond ((is-a? (car e) <xsd-restriction>)
-	   (let1 simple-type (->scheme-type (~ (car e) 'base))
+	   (let1 simple-type (->scheme-type (~ (car e) 'base) inner?)
 	     `(define ,(string->symbol (->scheme-class-name (~ type 'name)))
 		,simple-type)))
 	  ((is-a? (car e) <xsd-list>)
@@ -261,12 +274,15 @@ exec sagittarius $0 "$@"
 		,item-type))
 	   ))))
 
+(define-method generate-type-definition ((type <simple-type>))
+  (generate-type-definition type +named-type-suffix+))
+
 (define (%generate-content name e type min max :key (any #f))
   (let1 elm-name (string->symbol (or (schema-name e) "any"))
     `(,(string->symbol name)
       :init-keyword ,(->keyword name)
       ,@(if (eq? (string->symbol name) elm-name) '() `(:element-name ,elm-name))
-      :element-type ,(list (->scheme-type type) min max)
+      :element-type ,(list (->scheme-type type (*type-suffix*)) min max)
       ,@(if any `(:any-element ,any) '()))))
 
 (define (split-name name) (car (last-pair (string-split name #/\./))))
@@ -308,9 +324,13 @@ exec sagittarius $0 "$@"
 		     :any (~ e 'element 'process-contents)))
 
 (define-method generate-content ((e <type&element>))
-  (generate-content (~ e 'type)))
+  ;; FIXME Should be handled the same way as generate-type-definition
+  (parameterize ((*type-suffix* +element-type-suffix+))
+    (generate-content (~ e 'type))))
 
-(define (%generate-complex-type type inner?)
+(define-method generate-type-definition ((type <complex-type>))
+  (generate-type-definition type +named-type-suffix+))
+(define-method generate-type-definition ((type <complex-type>) inner?)
   ;; TODO handle missing class??
   (define (get-super type)
     (cond ((~ type-table type)
@@ -321,8 +341,7 @@ exec sagittarius $0 "$@"
   (define (generate-class type)
     (let ((contents (~ type 'contents))
 	  (super (~ type 'super))
-	  (name (->scheme-class-name (~ type 'name)
-				     (if inner? "-element-type" "-type"))))
+	  (name (->scheme-class-name (~ type 'name) inner?)))
       `(define-xml-type ,(string->symbol name)
 	 ,(if super (get-super super) ())
 	 ,(if (and (null? (car contents)) (null? (cdr contents)))
@@ -336,8 +355,6 @@ exec sagittarius $0 "$@"
 	`(begin 
 	   ,@contents
 	   ,(generate-class type)))))
-(define-method generate-type-definition ((type <complex-type>))
-  (%generate-complex-type type #f))
 
 ;; In this case, we put -element-type instead of -type.
 ;; NB: this is because, name is case *sensitive* in XML
@@ -350,7 +367,7 @@ exec sagittarius $0 "$@"
 ;;   </xsd:complexType>
 ;; </xsd:element>
 (define-method generate-type-definition ((type <type&element>))
-  (%generate-complex-type (~ type 'type) #t))
+  (generate-type-definition (~ type 'type) +element-type-suffix+))
 
 (define-method generate-element-definition ((e <type&element>))
   (let ((e (~ e 'element))
@@ -430,21 +447,24 @@ exec sagittarius $0 "$@"
 	(by-uri (car rule))
 	(error 'generate-library-name ":file must have :name option" rule)))
 
+  (define (rule->library-name rule)
+    (let ((name (memq :name rule)))
+      (or (and name (cadr name))
+	  (generate-library-name rule))))
+
   (define (generate-dependencies xsds rules-file)
     (define rules (and rules-file (call-with-input-file rules-file read)))
     (define (generate-dependency xsd)
       (define (construct-rule rule)
 	(define (->file name)
 	  (string-append (string-join (map symbol->string name) "/") ".scm"))
-	(let ((name (memq :name rule))
-	      (out  (memq :output rule)))
-	  (let1 name (or (and name (cadr name))
-			 (generate-library-name rule))
-	    (cons* name
-		   (or (and out (cadr out)) (->file name))
-		   (cond ((memq :no-namespace rule) => cadr)
-			 (else #f))
-		   xsd))))
+	(let ((out  (memq :output rule))
+	      (name (rule->library-name rule)))
+	  (cons* name
+		 (or (and out (cadr out)) (->file name))
+		 (cond ((memq :no-namespace rule) => cadr)
+		       (else #f))
+		 xsd)))
       (let1 namespace (schema-target-namespace xsd)
 	(cond ((assoc namespace rules) => construct-rule)
 	      ((and-let* ((rule (assq :file rules))
@@ -453,7 +473,14 @@ exec sagittarius $0 "$@"
 	       => construct-rule)
 	      (else #f))))
     (if rules
-	(filter-map generate-dependency (cdr xsds))
+	(let ((names (map rule->library-name rules))
+	      (deps (filter-map generate-dependency (cdr xsds))))
+	  ;; if rules file specifies dependency then we need to add
+	  ;; it to import clause, otherwise manual modification is
+	  ;; required (which is very inconvenient...)
+	  (lset-union (lambda (dep name) (equal? (car dep) (car name)))
+		      deps (map list names)))
+
 	;; ok then modify the code manually :P
 	'()))
   (with-args (cdr args)
@@ -478,13 +505,15 @@ exec sagittarius $0 "$@"
 	(let loop ((deps deps))
 	  (unless (null? deps)
 	    (let1 dep (car deps)
-	      (let ((name (car dep))
-		    (out  (cadr dep))
-		    (no-ns  (caddr dep))
-		    (xsd  (cdddr dep)))
-		;; not right solution...
-		(parameterize ((*ignore-ns* no-ns))
-		  (generate xsd (format "~a" name) out (map car (cdr deps))))))
+	      (unless (null? (cdr dep))
+		(let ((name (car dep))
+		      (out  (cadr dep))
+		      (no-ns  (caddr dep))
+		      (xsd  (cdddr dep)))
+		  ;; not right solution...
+		  (parameterize ((*ignore-ns* no-ns))
+		    (generate xsd (format "~a" name) out 
+			      (map car (cdr deps)))))))
 	    (loop (cdr deps)))
 	  ))
       )))
